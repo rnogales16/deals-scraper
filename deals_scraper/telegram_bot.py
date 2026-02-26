@@ -68,16 +68,6 @@ class TelegramBot:
         """Envía una oferta individual con formato HTML."""
         text = self._format_deal(deal)
 
-        # Errores de precio: text-only para máxima velocidad
-        if deal.alert_tier == "ERROR_DE_PRECIO":
-            await self._bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-            )
-            return
-
         if deal.image_url:
             try:
                 await self._bot.send_photo(
