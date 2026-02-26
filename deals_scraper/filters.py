@@ -496,10 +496,18 @@ def check_watchlist(
         for product in products:
             name_lower = product["name"].lower()
             max_price = float(product["max_price"])
+            min_price = float(product.get("min_price", 0))
+            exclude_kws = [kw.lower() for kw in product.get("exclude_keywords", [])]
 
             if not _is_watchlist_match(name_lower, title_lower):
                 continue
             if deal.current_price > max_price:
+                continue
+            if deal.current_price < min_price:
+                continue
+
+            # Rechazar si el título contiene alguna keyword excluida
+            if any(kw in title_lower for kw in exclude_kws):
                 continue
 
             discount = round((1 - deal.current_price / max_price) * 100, 1)

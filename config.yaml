@@ -9,14 +9,24 @@ watchlist:
   products:
     - name: "iPhone 15"
       max_price: 600
+      min_price: 200
+      exclude_keywords: ["funda", "carcasa", "protector", "cristal", "cargador", "cable"]
     - name: "AirPods Pro"
       max_price: 180
+      min_price: 50
+      exclude_keywords: ["funda", "carcasa", "protector", "estuche"]
     - name: "PlayStation 5"
       max_price: 350
+      min_price: 150
+      exclude_keywords: ["juego", "game", "edición", "edition", "DLC", "suscripción", "subscription", "plus", "mando", "controller", "headset", "auricular", "soporte", "skin", "pegatina", "disco", "digital edition"]
     - name: "MacBook Air M2"
       max_price: 800
+      min_price: 300
+      exclude_keywords: ["funda", "carcasa", "protector", "cargador", "adaptador", "hub"]
     - name: "iPad Air"
       max_price: 300
+      min_price: 100
+      exclude_keywords: ["funda", "carcasa", "protector", "cristal", "teclado", "pencil", "cargador"]
 
 telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
