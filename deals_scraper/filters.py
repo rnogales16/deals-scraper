@@ -95,6 +95,20 @@ def classify_deal(real_discount: float, price_error_threshold: float = 50.0) -> 
 # (hace años), no el valor real actual. No confiar en su descuento para bypass.
 _REFURBISHED_STORES = {"backmarket", "apple", "cex"}
 
+# Keywords en título que indican producto reacondicionado (cualquier tienda)
+_REFURBISHED_KEYWORDS = (
+    "reacondicionado", "renewed", "refurbished", "remanufactured",
+    "seminuevo", "segunda mano", "used", "como nuevo",
+)
+
+
+def _is_refurbished(deal: Deal) -> bool:
+    """Detecta si un deal es reacondicionado por tienda o título."""
+    if deal.store in _REFURBISHED_STORES:
+        return True
+    title_lower = deal.title.lower()
+    return any(kw in title_lower for kw in _REFURBISHED_KEYWORDS)
+
 
 # ------------------------------------------------------------------
 # Verificación anti-fake: solo alertar bajadas de precio reales
@@ -137,7 +151,7 @@ def verify_real_deals(
             # Bypass: posible error de precio — alertar inmediatamente
             # NO aplica a tiendas de reacondicionados (su original_price es
             # el precio de nuevo hace años, no el valor real actual)
-            if (deal.store not in _REFURBISHED_STORES
+            if (not _is_refurbished(deal)
                     and deal.original_price and deal.original_price > deal.current_price):
                 calculated_discount = (1 - deal.current_price / deal.original_price) * 100
                 price_ratio = deal.original_price / deal.current_price
@@ -520,7 +534,7 @@ def check_watchlist(
             # Tiendas de reacondicionados tienen precios bajos por defecto,
             # no confundir con errores de precio
             if (deal.current_price < max_price * 0.5
-                    and deal.store not in _REFURBISHED_STORES):
+                    and not _is_refurbished(deal)):
                 deal.alert_tier = "ERROR_DE_PRECIO"
             else:
                 deal.alert_tier = "CHOLLO"
@@ -528,7 +542,7 @@ def check_watchlist(
             # Tiendas de reacondicionados: su original_price es el precio
             # de retail cuando nuevo (hace años), no el valor real actual.
             # No mostrarlo para no engañar.
-            if deal.store in _REFURBISHED_STORES:
+            if _is_refurbished(deal):
                 deal.original_price = None
             else:
                 deal.original_price = deal.original_price or max_price
