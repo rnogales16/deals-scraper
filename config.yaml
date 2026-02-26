@@ -67,6 +67,28 @@ stores:
     client_type: browser
     scrape_urls:
       - "https://www.amazon.es/gp/goldbox"
+      # Electrónica / Informática
+      - "https://www.amazon.es/s?k=portatil&rh=p_n_deal_type%3AeFuture"
+      - "https://www.amazon.es/s?k=tablet&rh=p_n_deal_type%3AeFuture"
+      - "https://www.amazon.es/s?k=monitor&rh=p_n_deal_type%3AeFuture"
+      - "https://www.amazon.es/s?k=tarjeta+grafica"
+      - "https://www.amazon.es/s?k=ssd+nvme"
+      - "https://www.amazon.es/s?k=televisor"
+      # Smartphones
+      - "https://www.amazon.es/s?k=iphone"
+      - "https://www.amazon.es/s?k=samsung+galaxy"
+      - "https://www.amazon.es/s?k=xiaomi+redmi"
+      # Gaming
+      - "https://www.amazon.es/s?k=playstation+5"
+      - "https://www.amazon.es/s?k=nintendo+switch"
+      # Wearables / Audio
+      - "https://www.amazon.es/s?k=airpods"
+      - "https://www.amazon.es/s?k=smartwatch"
+      - "https://www.amazon.es/s?k=auriculares+bluetooth"
+      # Electrodomésticos de alto valor
+      - "https://www.amazon.es/s?k=robot+aspirador"
+      - "https://www.amazon.es/s?k=cafetera+automatica"
+      - "https://www.amazon.es/s?k=patinete+electrico"
 
   # -------------------------------------------------------------------
   # PCCOMPONENTES — Scraper específico (data-product-* attributes)
@@ -116,6 +138,12 @@ stores:
       - "https://www.mediamarkt.es/es/search.html?query=impresora"
       - "https://www.mediamarkt.es/es/search.html?query=consola"
       - "https://www.mediamarkt.es/es/search.html?query=disco+duro"
+      - "https://www.mediamarkt.es/es/search.html?query=tarjeta+grafica"
+      - "https://www.mediamarkt.es/es/search.html?query=robot+aspirador"
+      - "https://www.mediamarkt.es/es/search.html?query=cafetera"
+      - "https://www.mediamarkt.es/es/search.html?query=patinete+electrico"
+      - "https://www.mediamarkt.es/es/search.html?query=camara+fotos"
+      - "https://www.mediamarkt.es/es/search.html?query=altavoz+bluetooth"
 
   # ===================================================================
   # TIENDAS GENÉRICAS — usan GenericStore (JSON-LD/microdata/CSS)
@@ -241,6 +269,7 @@ stores:
     client_type: browser
     scrape_urls:
       - "https://www.ebay.es/deals"
+      - "https://www.ebay.es/deals/tech"
 
   # -------------------------------------------------------------------
   # ALIEXPRESS ESPAÑA
@@ -311,6 +340,11 @@ stores:
       - "https://www.ldlc.com/es/informatica/portatil/c4265/"
       - "https://www.ldlc.com/es/informatica/pieza-grafica/tarjeta-grafica-interna/c4684/"
       - "https://www.ldlc.com/es/informatica/monitor-pc/c4623/"
+      - "https://www.ldlc.com/es/informatica/procesador/c4300/"
+      - "https://www.ldlc.com/es/informatica/almacenamiento/disco-duro-ssd/c4823/"
+      - "https://www.ldlc.com/es/informatica/periferico-pc/raton/c4657/"
+      - "https://www.ldlc.com/es/informatica/periferico-pc/teclado/c4649/"
+      - "https://www.ldlc.com/es/sonido/auriculares/c4827/"
 
   # -------------------------------------------------------------------
   # SAMSUNG ESPAÑA
@@ -362,6 +396,9 @@ stores:
       - "https://www.decathlon.es/es/deportes/fitness-cardio/cintas-de-correr"
       - "https://www.decathlon.es/es/deportes/patinetes/electricos"
       - "https://www.decathlon.es/es/search?Ntt=kayak"
+      - "https://www.decathlon.es/es/search?Ntt=gps"
+      - "https://www.decathlon.es/es/search?Ntt=bicicleta+montana"
+      - "https://www.decathlon.es/es/search?Ntt=esqui"
 
   # -------------------------------------------------------------------
   # ZALANDO — Disabled: Bot detection causes navigation timeout

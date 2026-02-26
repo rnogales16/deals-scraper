@@ -1,8 +1,8 @@
 """Adapter Amazon.es — usa Playwright (browser client).
 
-Amazon renderiza las ofertas con React (SPA). Los datos de las ofertas
-vienen prefetched como JSON dentro de un bloque <script> con mountWidget().
-Este scraper extrae ese JSON en lugar de usar selectores CSS.
+Soporta dos tipos de páginas:
+1. Gold Box / ofertas del día  → JSON embebido en mountWidget()
+2. Búsquedas (/s?k=...)        → HTML con [data-component-type="s-search-result"]
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+
+from bs4 import BeautifulSoup, Tag
 
 from ..models import Deal
 from .base import BaseStore
@@ -20,6 +22,8 @@ logger = logging.getLogger(__name__)
 _MOUNT_WIDGET_START_RE = re.compile(
     r"assets\.mountWidget\(\s*'slot-\d+'\s*,\s*"
 )
+
+_PRICE_RE = re.compile(r"([\d.,]+)\s*€")
 
 
 def _extract_json_object(text: str, start: int) -> dict | None:
@@ -54,20 +58,43 @@ def _extract_json_object(text: str, start: int) -> dict | None:
     return None
 
 
-class AmazonStore(BaseStore):
-    """Scraper para Amazon.es (Gold Box / ofertas del día).
+def _parse_es_price(text: str) -> float | None:
+    """Parsea un precio en formato español: '1.299,99 €' → 1299.99."""
+    m = _PRICE_RE.search(text)
+    if not m:
+        return None
+    raw = m.group(1).replace(".", "").replace(",", ".")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
-    Extrae ofertas del JSON prefetched embebido en el HTML,
-    dentro de la llamada assets.mountWidget().
-    """
+
+class AmazonStore(BaseStore):
+    """Scraper para Amazon.es — Gold Box + búsquedas."""
 
     async def build_urls(self) -> list[str]:
         return list(self.config.scrape_urls)
 
     def parse_deals(self, html: str, url: str) -> list[Deal]:
-        deals: list[Deal] = []
+        # Estrategia 1: mountWidget (goldbox/deals)
+        deals = self._parse_goldbox(html)
+        if deals:
+            return deals
 
-        # Buscar todos los bloques mountWidget y extraer JSON balanceado
+        # Estrategia 2: search results
+        deals = self._parse_search_results(html)
+        if deals:
+            return deals
+
+        logger.warning("[amazon] No se encontraron ofertas en %s", url)
+        return []
+
+    # ------------------------------------------------------------------
+    # Estrategia 1: Gold Box (mountWidget JSON)
+    # ------------------------------------------------------------------
+    def _parse_goldbox(self, html: str) -> list[Deal]:
+        deals: list[Deal] = []
         for match in _MOUNT_WIDGET_START_RE.finditer(html):
             json_start = match.end()
             data = _extract_json_object(html, json_start)
@@ -80,20 +107,11 @@ class AmazonStore(BaseStore):
                     if deal:
                         deals.append(deal)
             except (KeyError, TypeError):
-                logger.debug("Error procesando bloque mountWidget", exc_info=True)
                 continue
-
-        if not deals:
-            logger.warning(
-                "[amazon] No se encontraron ofertas en el JSON embebido. "
-                "Amazon puede haber cambiado la estructura."
-            )
-
         return deals
 
     @staticmethod
     def _extract_promotions(data: dict) -> list[dict]:
-        """Navega el JSON para encontrar rankedPromotions."""
         try:
             prefetched = data.get("prefetchedData") or data.get("config", {}).get("prefetchedData", {})
             entity = prefetched.get("entity", {})
@@ -103,27 +121,23 @@ class AmazonStore(BaseStore):
 
     @staticmethod
     def _parse_promotion(promo: dict) -> Deal | None:
-        """Extrae un Deal de un objeto rankedPromotion."""
         try:
             product = promo.get("product", {})
             entity = product.get("entity", {})
             if not entity:
                 return None
 
-            # Título
             title_obj = entity.get("title", {}).get("entity", {})
             title = title_obj.get("displayString", "")
             if not title:
                 return None
 
-            # URL del producto
             links = entity.get("links", {}).get("entity", {})
             view_url = links.get("viewOnAmazon", {}).get("url", "")
             product_url = f"https://www.amazon.es{view_url}" if view_url else ""
             if not product_url:
                 return None
 
-            # Imagen
             images_entity = entity.get("productImages", {}).get("entity", {})
             images_list = images_entity.get("images", [])
             image_url = ""
@@ -132,7 +146,6 @@ class AmazonStore(BaseStore):
                 if physical_id:
                     image_url = f"https://m.media-amazon.com/images/I/{physical_id}._AC_SL300_.jpg"
 
-            # Precios — buscar en buyingOptions
             buying_options = entity.get("buyingOptions", [])
             current_price = None
             original_price = None
@@ -142,8 +155,6 @@ class AmazonStore(BaseStore):
                 price_entity = opt.get("price", {}).get("entity", {})
                 if not price_entity:
                     continue
-
-                # Precio actual
                 pay = price_entity.get("priceToPay", {})
                 amount_str = (
                     pay.get("moneyValueOrRange", {})
@@ -152,8 +163,6 @@ class AmazonStore(BaseStore):
                 )
                 if amount_str:
                     current_price = float(amount_str)
-
-                # Precio original
                 basis = price_entity.get("basisPrice", {})
                 orig_str = (
                     basis.get("moneyValueOrRange", {})
@@ -162,21 +171,17 @@ class AmazonStore(BaseStore):
                 )
                 if orig_str:
                     original_price = float(orig_str)
-
-                # Descuento
                 savings = price_entity.get("savings", {})
                 pct_val = savings.get("percentage", {}).get("value")
                 if pct_val is not None:
                     discount_pct = float(pct_val)
-
-                # Usar el primer buyingOption con precio
                 if current_price is not None:
                     break
 
             if current_price is None:
                 return None
 
-            deal = Deal(
+            return Deal(
                 title=title,
                 url=product_url,
                 store="amazon",
@@ -185,8 +190,71 @@ class AmazonStore(BaseStore):
                 discount_pct=discount_pct,
                 image_url=image_url,
             )
-            return deal
-
         except (KeyError, TypeError, ValueError):
-            logger.debug("Error parseando promoción de Amazon", exc_info=True)
+            return None
+
+    # ------------------------------------------------------------------
+    # Estrategia 2: Search results (HTML)
+    # ------------------------------------------------------------------
+    def _parse_search_results(self, html: str) -> list[Deal]:
+        soup = BeautifulSoup(html, "html.parser")
+        results = soup.select('[data-component-type="s-search-result"]')
+        if not results:
+            return []
+
+        deals: list[Deal] = []
+        for result in results:
+            deal = self._parse_search_item(result)
+            if deal:
+                deals.append(deal)
+        return deals
+
+    @staticmethod
+    def _parse_search_item(item: Tag) -> Deal | None:
+        try:
+            asin = item.get("data-asin", "")
+            if not asin:
+                return None
+
+            # Título
+            h2 = item.select_one("h2")
+            title = h2.get_text(strip=True) if h2 else ""
+            if not title:
+                return None
+
+            # URL
+            product_url = f"https://www.amazon.es/dp/{asin}"
+
+            # Precio actual: primer .a-offscreen dentro de .a-price sin tachado
+            price_el = item.select_one(".a-price:not([data-a-strike]) .a-offscreen")
+            if not price_el:
+                return None
+            current_price = _parse_es_price(price_el.get_text())
+            if not current_price or current_price <= 0:
+                return None
+
+            # Precio original (tachado)
+            original_price: float | None = None
+            orig_el = item.select_one(
+                ".a-price[data-a-strike] .a-offscreen, "
+                ".a-price.a-text-price .a-offscreen"
+            )
+            if orig_el:
+                original_price = _parse_es_price(orig_el.get_text())
+                if original_price and original_price <= current_price:
+                    original_price = None
+
+            # Imagen
+            img = item.select_one("img.s-image")
+            image_url = img.get("src", "") if img else ""
+
+            return Deal(
+                title=title,
+                url=product_url,
+                store="amazon",
+                current_price=current_price,
+                original_price=original_price,
+                image_url=image_url,
+            )
+        except (KeyError, TypeError, ValueError):
             return None
