@@ -1,0 +1,517 @@
+# Deals Scraper — Configuración principal
+# Scraping masivo de ofertas en tiendas online españolas
+
+# =======================================================================
+# WATCHLIST — Alertar cuando se vean productos a buen precio
+# =======================================================================
+watchlist:
+  enabled: true
+  products:
+    - name: "iPhone 15"
+      max_price: 600
+    - name: "AirPods Pro"
+      max_price: 180
+    - name: "PlayStation 5"
+      max_price: 350
+    - name: "MacBook Air M2"
+      max_price: 800
+    - name: "iPad Air"
+      max_price: 300
+
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  chat_id: "201330690"
+  max_offers_per_cycle: 20
+
+market_price:
+  enabled: true
+  max_idealo_per_cycle: 40
+  cache_ttl_days: 7
+  cross_store_fuzzy_threshold: 80
+
+filters:
+  min_discount: 60
+  price_min: 0.01
+  price_max: 20000000.0
+  keywords: []
+  categories: []
+  real_discount_min: 40
+  min_observations: 2
+
+# Modo velocidad: "fast" (1-2.5s/URL, paralelo) o "stealth" (8-24s/URL, secuencial)
+speed:
+  mode: fast
+  max_concurrent_stores: 4
+  max_concurrent_urls_per_store: 3
+  price_error_threshold: 50   # % descuento para considerar error de precio
+
+anti_ban:
+  delay_min: 0.5
+  delay_max: 1.5
+  max_requests_per_minute: 15
+  proxy_url: null
+
+# =======================================================================
+# TIENDAS — Scrapers específicos (amazon, pccomponentes, mediamarkt)
+#           + GenericStore para todas las demás
+# =======================================================================
+
+stores:
+
+  # -------------------------------------------------------------------
+  # AMAZON.ES — Scraper específico (JSON embebido en mountWidget)
+  # -------------------------------------------------------------------
+  - name: amazon
+    enabled: true
+    interval_minutes: 3
+    client_type: browser
+    scrape_urls:
+      - "https://www.amazon.es/gp/goldbox"
+
+  # -------------------------------------------------------------------
+  # PCCOMPONENTES — Scraper específico (data-product-* attributes)
+  # -------------------------------------------------------------------
+  - name: pccomponentes
+    enabled: true
+    interval_minutes: 3
+    client_type: browser
+    scrape_urls:
+      - "https://www.pccomponentes.com/portatiles"
+      - "https://www.pccomponentes.com/smartphones"
+      - "https://www.pccomponentes.com/tarjetas-graficas"
+      - "https://www.pccomponentes.com/televisores"
+      - "https://www.pccomponentes.com/monitores"
+      - "https://www.pccomponentes.com/tablets"
+      - "https://www.pccomponentes.com/ordenadores-sobremesa"
+      - "https://www.pccomponentes.com/discos-duros-ssd"
+      - "https://www.pccomponentes.com/procesadores"
+      - "https://www.pccomponentes.com/placas-base"
+      - "https://www.pccomponentes.com/memorias-ram"
+      - "https://www.pccomponentes.com/auriculares"
+      - "https://www.pccomponentes.com/smartwatch"
+      - "https://www.pccomponentes.com/impresoras"
+      - "https://www.pccomponentes.com/altavoces"
+      - "https://www.pccomponentes.com/fuentes-alimentacion"
+      - "https://www.pccomponentes.com/ratones"
+      - "https://www.pccomponentes.com/teclados"
+      - "https://www.pccomponentes.com/cafeteras"
+      - "https://www.pccomponentes.com/patinetes-electricos"
+      - "https://www.pccomponentes.com/perifericos"
+
+  # -------------------------------------------------------------------
+  # MEDIAMARKT — Scraper específico (data-test attributes)
+  # -------------------------------------------------------------------
+  - name: mediamarkt
+    enabled: true
+    interval_minutes: 3
+    client_type: browser
+    scrape_urls:
+      - "https://www.mediamarkt.es/es/search.html?query=smartphone"
+      - "https://www.mediamarkt.es/es/search.html?query=portatil"
+      - "https://www.mediamarkt.es/es/search.html?query=televisor"
+      - "https://www.mediamarkt.es/es/search.html?query=tablet"
+      - "https://www.mediamarkt.es/es/search.html?query=auriculares"
+      - "https://www.mediamarkt.es/es/search.html?query=smartwatch"
+      - "https://www.mediamarkt.es/es/search.html?query=monitor"
+      - "https://www.mediamarkt.es/es/search.html?query=impresora"
+      - "https://www.mediamarkt.es/es/search.html?query=consola"
+      - "https://www.mediamarkt.es/es/search.html?query=disco+duro"
+
+  # ===================================================================
+  # TIENDAS GENÉRICAS — usan GenericStore (JSON-LD/microdata/CSS)
+  # ===================================================================
+
+  # -------------------------------------------------------------------
+  # EL CORTE INGLÉS — Stealth mode para evitar Akamai bot detection
+  # -------------------------------------------------------------------
+  - name: elcorteingles
+    enabled: false  # ERR_HTTP2_PROTOCOL_ERROR — bloqueo a nivel red
+    interval_minutes: 30
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.elcorteingles.es/electronica/ofertas/"
+
+  # -------------------------------------------------------------------
+  # FNAC — Disabled: Queue-it bot protection returns 403
+  # -------------------------------------------------------------------
+  - name: fnac
+    enabled: false
+    interval_minutes: 45
+    client_type: browser
+    scrape_urls:
+      - "https://www.fnac.es/informatica/pc-portatil/Portatil/cl220"
+
+  # -------------------------------------------------------------------
+  # WORTEN — Category pages blocked by Cloudflare, only search works
+  # -------------------------------------------------------------------
+  - name: worten
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.worten.es/search?query=portatil"
+      - "https://www.worten.es/search?query=iphone"
+      - "https://www.worten.es/search?query=samsung+galaxy"
+      - "https://www.worten.es/search?query=televisor"
+      - "https://www.worten.es/search?query=tablet"
+      - "https://www.worten.es/search?query=auriculares"
+      - "https://www.worten.es/search?query=smartwatch"
+      - "https://www.worten.es/search?query=consola"
+
+  # -------------------------------------------------------------------
+  # COOLMOD — URLs with trailing slash (required)
+  # -------------------------------------------------------------------
+  - name: coolmod
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.coolmod.com/tarjetas-graficas/"
+      - "https://www.coolmod.com/portatiles-portatiles/"
+      - "https://www.coolmod.com/perifericos-monitores/"
+      - "https://www.coolmod.com/componentes-pc-procesadores/"
+      - "https://www.coolmod.com/componentes-pc-memorias-ram/"
+      - "https://www.coolmod.com/componentes-pc-discos-ssd/"
+      - "https://www.coolmod.com/componentes-pc-placas-base/"
+      - "https://www.coolmod.com/componentes-pc-fuentes-alimentacion/"
+      - "https://www.coolmod.com/componentes-pc-cajas/"
+      - "https://www.coolmod.com/perifericos-teclados/"
+      - "https://www.coolmod.com/perifericos-ratones/"
+
+  # -------------------------------------------------------------------
+  # VERSUS GAMERS — Disabled: Server returns error page
+  # -------------------------------------------------------------------
+  - name: vsgamers
+    enabled: false
+    interval_minutes: 60
+    client_type: browser
+    scrape_urls:
+      - "https://www.vsgamers.es/ofertas"
+
+  # -------------------------------------------------------------------
+  # CARREFOUR — Disabled: Cloudflare redirects to homepage
+  # -------------------------------------------------------------------
+  - name: carrefour
+    enabled: false
+    interval_minutes: 60
+    client_type: browser
+    scrape_urls:
+      - "https://www.carrefour.es/electronica/ofertas-electronica/cat590001/c"
+
+  # -------------------------------------------------------------------
+  # GAME — Stealth mode: JS-rendered, necesita scroll completo
+  # -------------------------------------------------------------------
+  - name: game
+    enabled: true
+    interval_minutes: 15
+    client_type: browser
+    force_stealth: false  # Ya no necesario tras fix de bloqueo CSS
+    scrape_urls:
+      - "https://www.game.es/VIDEOJUEGOS/PLAYSTATION-5"
+      - "https://www.game.es/VIDEOJUEGOS/NINTENDO-SWITCH"
+      - "https://www.game.es/VIDEOJUEGOS/XBOX-SERIES-X"
+      - "https://www.game.es/CONSOLAS"
+      - "https://www.game.es/ACCESORIOS"
+
+  # -------------------------------------------------------------------
+  # BACK MARKET (reacondicionados)
+  # -------------------------------------------------------------------
+  - name: backmarket
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.backmarket.es/es-es/search?q=iphone"
+      - "https://www.backmarket.es/es-es/search?q=macbook"
+      - "https://www.backmarket.es/es-es/search?q=ipad"
+      - "https://www.backmarket.es/es-es/search?q=samsung+galaxy"
+      - "https://www.backmarket.es/es-es/search?q=playstation"
+      - "https://www.backmarket.es/es-es/search?q=airpods"
+      - "https://www.backmarket.es/es-es/search?q=pixel"
+      - "https://www.backmarket.es/es-es/search?q=nintendo+switch"
+
+  # -------------------------------------------------------------------
+  # EBAY ESPAÑA — Only /deals works; /b/ and /sch/ trigger bot challenge
+  # -------------------------------------------------------------------
+  - name: ebay
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.ebay.es/deals"
+
+  # -------------------------------------------------------------------
+  # ALIEXPRESS ESPAÑA
+  # -------------------------------------------------------------------
+  - name: aliexpress
+    enabled: false  # Captcha Interception — no se puede saltar
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://es.aliexpress.com/w/wholesale-ofertas.html"
+      - "https://es.aliexpress.com/w/wholesale-flash-deals.html"
+      - "https://es.aliexpress.com/w/wholesale-apple.html"
+
+  # -------------------------------------------------------------------
+  # MIRAVIA
+  # -------------------------------------------------------------------
+  - name: miravia
+    enabled: false  # Captcha Interception — no se puede saltar
+    interval_minutes: 5
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.miravia.es/search?q=ofertas"
+      - "https://www.miravia.es/search?q=apple"
+      - "https://www.miravia.es/search?q=samsung"
+      - "https://www.miravia.es/search?q=xiaomi"
+
+  # -------------------------------------------------------------------
+  # PHONE HOUSE — Stealth mode: servidor lento, necesita más tiempo
+  # -------------------------------------------------------------------
+  - name: phonehouse
+    enabled: true
+    interval_minutes: 30
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.phonehouse.es/moviles-libres.html"
+
+  # -------------------------------------------------------------------
+  # LEROY MERLIN — Stealth mode: SPA que necesita hidratación JS
+  # -------------------------------------------------------------------
+  - name: leroymerlin
+    enabled: false  # DataDome CAPTCHA + 403
+    interval_minutes: 30
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.leroymerlin.es/ofertas"
+
+  # -------------------------------------------------------------------
+  # CECOTEC — Disabled: SPA, products don't render in headless
+  # -------------------------------------------------------------------
+  - name: cecotec
+    enabled: false
+    interval_minutes: 90
+    client_type: browser
+    scrape_urls:
+      - "https://www.cecotec.es/outlet"
+
+  # -------------------------------------------------------------------
+  # LDLC
+  # -------------------------------------------------------------------
+  - name: ldlc
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.ldlc.com/es/informatica/portatil/c4265/"
+      - "https://www.ldlc.com/es/informatica/pieza-grafica/tarjeta-grafica-interna/c4684/"
+      - "https://www.ldlc.com/es/informatica/monitor-pc/c4623/"
+
+  # -------------------------------------------------------------------
+  # SAMSUNG ESPAÑA
+  # -------------------------------------------------------------------
+  - name: samsung
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.samsung.com/es/smartphones/all-smartphones/"
+      - "https://www.samsung.com/es/tablets/all-tablets/"
+      - "https://www.samsung.com/es/tvs/all-tvs/"
+      - "https://www.samsung.com/es/watches/all-watches/"
+      - "https://www.samsung.com/es/audio-sound/all-audio-sound/"
+      - "https://www.samsung.com/es/computers/all-computers/"
+
+  # -------------------------------------------------------------------
+  # XIAOMI — Disabled: WAF returns "Access Denied"
+  # -------------------------------------------------------------------
+  - name: xiaomi
+    enabled: false
+    interval_minutes: 90
+    client_type: browser
+    scrape_urls:
+      - "https://www.mi.com/es/sale"
+
+  # -------------------------------------------------------------------
+  # APPLE REFURBISHED (reacondicionados oficiales)
+  # -------------------------------------------------------------------
+  - name: apple
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.apple.com/es/shop/refurbished/mac"
+      - "https://www.apple.com/es/shop/refurbished/ipad"
+      - "https://www.apple.com/es/shop/refurbished/iphone"
+
+  # -------------------------------------------------------------------
+  # DECATHLON
+  # -------------------------------------------------------------------
+  - name: decathlon
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.decathlon.es/es/deportes/ciclismo/bicicletas-electricas"
+      - "https://www.decathlon.es/es/electronica-deportiva/relojes-deportivos"
+      - "https://www.decathlon.es/es/deportes/fitness-cardio/cintas-de-correr"
+      - "https://www.decathlon.es/es/deportes/patinetes/electricos"
+      - "https://www.decathlon.es/es/search?Ntt=kayak"
+
+  # -------------------------------------------------------------------
+  # ZALANDO — Disabled: Bot detection causes navigation timeout
+  # -------------------------------------------------------------------
+  - name: zalando
+    enabled: false
+    interval_minutes: 90
+    client_type: browser
+    scrape_urls:
+      - "https://www.zalando.es/hombre/?discount=true&order=discount"
+
+  # -------------------------------------------------------------------
+  # IKEA
+  # -------------------------------------------------------------------
+  - name: ikea
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.ikea.com/es/es/offers/"
+
+  # -------------------------------------------------------------------
+  # LIDL — Uses data-impressiondata with JSON product info
+  # -------------------------------------------------------------------
+  - name: lidl
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.lidl.es/es/electronica"
+      - "https://www.lidl.es/es/bricolaje"
+      - "https://www.lidl.es/es/hogar"
+      - "https://www.lidl.es/es/cocina"
+
+  # -------------------------------------------------------------------
+  # ALCAMPO — Disabled: Bot detection returns blank page (13 bytes)
+  # -------------------------------------------------------------------
+  - name: alcampo
+    enabled: false
+    interval_minutes: 120
+    client_type: browser
+    scrape_urls:
+      - "https://www.alcampo.es/search?q=ofertas+electronica"
+
+  # -------------------------------------------------------------------
+  # DYSON — Disabled: HTTP2 protocol error (CDN bot fingerprinting)
+  # -------------------------------------------------------------------
+  - name: dyson
+    enabled: false
+    interval_minutes: 120
+    client_type: browser
+    scrape_urls:
+      - "https://www.dyson.es/ofertas"
+
+  # -------------------------------------------------------------------
+  # BOULANGER — Disabled: WAF returns "Invalid URL"
+  # -------------------------------------------------------------------
+  - name: boulanger
+    enabled: false
+    interval_minutes: 90
+    client_type: browser
+    scrape_urls:
+      - "https://www.boulanger.com/c/offre-du-moment"
+
+  # -------------------------------------------------------------------
+  # ALTERNATE — Fixed URLs: use /listing.xhtml?q= search format
+  # -------------------------------------------------------------------
+  - name: alternate
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.alternate.es/listing.xhtml?q=gpu"
+      - "https://www.alternate.es/listing.xhtml?q=portatil"
+      - "https://www.alternate.es/listing.xhtml?q=monitor"
+      - "https://www.alternate.es/listing.xhtml?q=ssd"
+      - "https://www.alternate.es/listing.xhtml?q=procesador"
+      - "https://www.alternate.es/listing.xhtml?q=teclado"
+      - "https://www.alternate.es/listing.xhtml?q=raton"
+
+  # -------------------------------------------------------------------
+  # AUSSAR — Disabled: Cloudflare challenge ("Un momento...")
+  # -------------------------------------------------------------------
+  - name: aussar
+    enabled: false
+    interval_minutes: 90
+    client_type: browser
+    scrape_urls:
+      - "https://www.aussar.es/ofertas"
+
+  # -------------------------------------------------------------------
+  # POWERPLANETONLINE — Fixed URLs: /es/ prefix required
+  # -------------------------------------------------------------------
+  - name: powerplanetonline
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    scrape_urls:
+      - "https://www.powerplanetonline.com/es/"
+      - "https://www.powerplanetonline.com/es/portatiles"
+
+  # -------------------------------------------------------------------
+  # TUIMEILIBRE — Disabled: Navigation timeout (server blocks/stalls)
+  # -------------------------------------------------------------------
+  - name: tuimeilibre
+    enabled: false
+    interval_minutes: 60
+    client_type: browser
+    scrape_urls:
+      - "https://www.tuimeilibre.com/telefonos-moviles"
+
+  # -------------------------------------------------------------------
+  # LIFE INFORMÁTICA — WooCommerce Store API (JSON, no browser needed)
+  # -------------------------------------------------------------------
+  - name: lifeinformatica
+    enabled: true
+    interval_minutes: 30
+    client_type: http
+    scrape_urls:
+      - "https://www.lifeinformatica.com/"
+
+  # -------------------------------------------------------------------
+  # CEX (es.webuy.com) — Segunda mano, browser (Cloudflare)
+  # -------------------------------------------------------------------
+  - name: cex
+    enabled: true
+    interval_minutes: 5
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://es.webuy.com/search?superCatId=4"
+      - "https://es.webuy.com/search?superCatId=1"
+      - "https://es.webuy.com/search?superCatId=5"
+      - "https://es.webuy.com/search?q=iphone"
+      - "https://es.webuy.com/search?q=macbook"
+      - "https://es.webuy.com/search?q=airpods"
+      - "https://es.webuy.com/search?q=playstation"
+      - "https://es.webuy.com/search?q=nintendo+switch"
+
+  # -------------------------------------------------------------------
+  # SHOPPILLOW — Disabled: Domain no longer exists (DNS failure)
+  # -------------------------------------------------------------------
+  - name: shoppillow
+    enabled: false
+    interval_minutes: 90
+    client_type: browser
+    scrape_urls:
+      - "https://www.shoppillow.es/ofertas"
+
+scheduler:
+  mode: daemon
+  default_interval_minutes: 60
