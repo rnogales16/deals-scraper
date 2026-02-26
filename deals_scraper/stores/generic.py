@@ -216,7 +216,7 @@ def _deal_from_jsonld_product(obj: dict, page_url: str, store_name: str) -> Deal
         return None
     title = str(title).strip()
 
-    product_url = _resolve_url(obj.get("url"), page_url)
+    product_url = _resolve_url(obj.get("url") or obj.get("@id"), page_url)
     image_url = _jsonld_image(obj)
 
     offers = obj.get("offers", {})

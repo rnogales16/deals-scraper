@@ -35,7 +35,7 @@ telegram:
 
 market_price:
   enabled: true
-  max_idealo_per_cycle: 40
+  max_idealo_per_cycle: 80
   cache_ttl_days: 7
   cross_store_fuzzy_threshold: 80
 
@@ -51,8 +51,8 @@ filters:
 # Modo velocidad: "fast" (1-2.5s/URL, paralelo) o "stealth" (8-24s/URL, secuencial)
 speed:
   mode: fast
-  max_concurrent_stores: 4
-  max_concurrent_urls_per_store: 3
+  max_concurrent_stores: 6
+  max_concurrent_urls_per_store: 5
   price_error_threshold: 50   # % descuento para considerar error de precio
 
 anti_ban:
@@ -73,7 +73,7 @@ stores:
   # -------------------------------------------------------------------
   - name: amazon
     enabled: true
-    interval_minutes: 3
+    interval_minutes: 2
     client_type: browser
     scrape_urls:
       - "https://www.amazon.es/gp/goldbox"
@@ -99,13 +99,20 @@ stores:
       - "https://www.amazon.es/s?k=robot+aspirador"
       - "https://www.amazon.es/s?k=cafetera+automatica"
       - "https://www.amazon.es/s?k=patinete+electrico"
+      # Página 2 — más volumen en búsquedas productivas
+      - "https://www.amazon.es/s?k=portatil&rh=p_n_deal_type%3AeFuture&page=2"
+      - "https://www.amazon.es/s?k=tablet&rh=p_n_deal_type%3AeFuture&page=2"
+      - "https://www.amazon.es/s?k=televisor&page=2"
+      - "https://www.amazon.es/s?k=iphone&page=2"
+      - "https://www.amazon.es/s?k=samsung+galaxy&page=2"
+      - "https://www.amazon.es/s?k=auriculares+bluetooth&page=2"
 
   # -------------------------------------------------------------------
   # PCCOMPONENTES — Scraper específico (data-product-* attributes)
   # -------------------------------------------------------------------
   - name: pccomponentes
     enabled: true
-    interval_minutes: 3
+    interval_minutes: 2
     client_type: browser
     scrape_urls:
       - "https://www.pccomponentes.com/portatiles"
@@ -129,13 +136,19 @@ stores:
       - "https://www.pccomponentes.com/cafeteras"
       - "https://www.pccomponentes.com/patinetes-electricos"
       - "https://www.pccomponentes.com/perifericos"
+      # Página 2 — categorías grandes
+      - "https://www.pccomponentes.com/portatiles?page=2"
+      - "https://www.pccomponentes.com/smartphones?page=2"
+      - "https://www.pccomponentes.com/tarjetas-graficas?page=2"
+      - "https://www.pccomponentes.com/televisores?page=2"
+      - "https://www.pccomponentes.com/monitores?page=2"
 
   # -------------------------------------------------------------------
   # MEDIAMARKT — Scraper específico (data-test attributes)
   # -------------------------------------------------------------------
   - name: mediamarkt
     enabled: true
-    interval_minutes: 3
+    interval_minutes: 2
     client_type: browser
     scrape_urls:
       - "https://www.mediamarkt.es/es/search.html?query=smartphone"
@@ -185,7 +198,7 @@ stores:
   # -------------------------------------------------------------------
   - name: worten
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     force_stealth: true
     scrape_urls:
@@ -203,7 +216,7 @@ stores:
   # -------------------------------------------------------------------
   - name: coolmod
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.coolmod.com/tarjetas-graficas/"
@@ -243,7 +256,7 @@ stores:
   # -------------------------------------------------------------------
   - name: game
     enabled: true
-    interval_minutes: 15
+    interval_minutes: 8
     client_type: browser
     force_stealth: false  # Ya no necesario tras fix de bloqueo CSS
     scrape_urls:
@@ -258,7 +271,7 @@ stores:
   # -------------------------------------------------------------------
   - name: backmarket
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.backmarket.es/es-es/search?q=iphone"
@@ -275,7 +288,7 @@ stores:
   # -------------------------------------------------------------------
   - name: ebay
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.ebay.es/deals"
@@ -312,7 +325,7 @@ stores:
   # -------------------------------------------------------------------
   - name: phonehouse
     enabled: true
-    interval_minutes: 30
+    interval_minutes: 15
     client_type: browser
     force_stealth: true
     scrape_urls:
@@ -344,7 +357,7 @@ stores:
   # -------------------------------------------------------------------
   - name: ldlc
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.ldlc.com/es/informatica/portatil/c4265/"
@@ -361,7 +374,7 @@ stores:
   # -------------------------------------------------------------------
   - name: samsung
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.samsung.com/es/smartphones/all-smartphones/"
@@ -398,7 +411,7 @@ stores:
   # -------------------------------------------------------------------
   - name: decathlon
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.decathlon.es/es/deportes/ciclismo/bicicletas-electricas"
@@ -436,7 +449,7 @@ stores:
   # -------------------------------------------------------------------
   - name: lidl
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.lidl.es/es/electronica"
@@ -479,7 +492,7 @@ stores:
   # -------------------------------------------------------------------
   - name: alternate
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     scrape_urls:
       - "https://www.alternate.es/listing.xhtml?q=gpu"
@@ -526,7 +539,7 @@ stores:
   # -------------------------------------------------------------------
   - name: lifeinformatica
     enabled: true
-    interval_minutes: 30
+    interval_minutes: 15
     client_type: http
     scrape_urls:
       - "https://www.lifeinformatica.com/"
@@ -536,7 +549,7 @@ stores:
   # -------------------------------------------------------------------
   - name: cex
     enabled: true
-    interval_minutes: 5
+    interval_minutes: 3
     client_type: browser
     force_stealth: true
     scrape_urls:
@@ -558,6 +571,67 @@ stores:
     client_type: browser
     scrape_urls:
       - "https://www.shoppillow.es/ofertas"
+
+  # -------------------------------------------------------------------
+  # NEOBYTE — PrestaShop, product-miniature cards
+  # -------------------------------------------------------------------
+  - name: neobyte
+    enabled: true
+    interval_minutes: 10
+    client_type: browser
+    scrape_urls:
+      - "https://www.neobyte.es/buscador?s=gaming"
+      - "https://www.neobyte.es/buscador?s=portatil"
+      - "https://www.neobyte.es/ordenadores-218"
+      - "https://www.neobyte.es/pc-gaming-238"
+
+  # -------------------------------------------------------------------
+  # DYNOS — Cloudflare-protected, necesita stealth
+  # -------------------------------------------------------------------
+  - name: dynos
+    enabled: false  # Cloudflare challenge — no se puede saltar ni con stealth
+    interval_minutes: 10
+    client_type: browser
+    force_stealth: true
+    scrape_urls:
+      - "https://www.dynos.es/ordenadores"
+      - "https://www.dynos.es/componentes"
+      - "https://www.dynos.es/perifericos"
+
+  # -------------------------------------------------------------------
+  # PCBOX — VTEX, necesita URLs de categoría (no search)
+  # -------------------------------------------------------------------
+  - name: pcbox
+    enabled: true
+    interval_minutes: 10
+    client_type: browser
+    scrape_urls:
+      - "https://www.pcbox.com/portatiles"
+      - "https://www.pcbox.com/componentes-de-ordenador"
+
+  # -------------------------------------------------------------------
+  # ELECTROCOSTO — Electrodomésticos y electrónica
+  # -------------------------------------------------------------------
+  - name: electrocosto
+    enabled: true
+    interval_minutes: 10
+    client_type: browser
+    scrape_urls:
+      - "https://www.electrocosto.com/televisores"
+      - "https://www.electrocosto.com/portatiles"
+      - "https://www.electrocosto.com/smartphones"
+      - "https://www.electrocosto.com/electrodomesticos"
+
+  # -------------------------------------------------------------------
+  # INFO-COMPUTER — Portátiles reacondicionados y servidores
+  # -------------------------------------------------------------------
+  - name: infocomputer
+    enabled: true
+    interval_minutes: 10
+    client_type: browser
+    scrape_urls:
+      - "https://www.info-computer.com/portatiles"
+      - "https://www.info-computer.com/servidores"
 
 scheduler:
   mode: daemon
