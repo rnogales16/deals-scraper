@@ -489,6 +489,14 @@ class BrowserClient:
                 "--disable-gpu",
                 "--lang=es-ES",
                 "--disable-features=IsolateOrigins,site-per-process",
+                # Memory optimization
+                "--js-flags=--max-old-space-size=256",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--single-process",
             ],
         }
         if self.proxy_url:
@@ -497,14 +505,25 @@ class BrowserClient:
         self._browser = await self._playwright.chromium.launch(**launch_opts)
         logger.info("Navegador Chromium iniciado (headless=%s)", self.headless)
 
-    async def close(self) -> None:
-        """Cierra contextos persistentes, el navegador y Playwright."""
-        for domain, ctx in self._contexts.items():
+    async def cleanup_contexts(self) -> None:
+        """Cierra todos los contextos persistentes para liberar memoria.
+
+        Llamar después de cada ciclo de scraping de una tienda.
+        """
+        closed = 0
+        for domain, ctx in list(self._contexts.items()):
             try:
                 await ctx.close()
+                closed += 1
             except Exception:
                 pass
         self._contexts.clear()
+        if closed:
+            logger.debug("Contextos cerrados: %d (memoria liberada)", closed)
+
+    async def close(self) -> None:
+        """Cierra contextos persistentes, el navegador y Playwright."""
+        await self.cleanup_contexts()
         if self._browser:
             await self._browser.close()
         if self._playwright:
@@ -700,6 +719,9 @@ class BrowserClient:
             wait_ms = int(random.uniform(0.5, 1.0) * 1000)
             await page.wait_for_timeout(wait_ms)
 
+            # Wait for Cloudflare Turnstile challenge to resolve
+            await self._wait_for_cloudflare(page)
+
             # Single fast scroll to trigger lazy-loaded content
             try:
                 await page.evaluate(
@@ -719,10 +741,23 @@ class BrowserClient:
         finally:
             await page.close()
 
+    _MAX_CONTEXTS = 3  # Máximo de contextos simultáneos para limitar RAM
+
     async def _get_or_create_context(self, domain: str):
         """Return a persistent BrowserContext for the domain, creating if needed."""
         if domain in self._contexts:
             return self._contexts[domain]
+
+        # Evitar acumulación de contextos: cerrar los más antiguos
+        while len(self._contexts) >= self._MAX_CONTEXTS:
+            oldest_domain = next(iter(self._contexts))
+            old_ctx = self._contexts.pop(oldest_domain)
+            try:
+                await old_ctx.close()
+                logger.debug("Contexto cerrado (límite %d): %s",
+                             self._MAX_CONTEXTS, oldest_domain)
+            except Exception:
+                pass
 
         ua = random.choice(_USER_AGENTS)
         viewport = random.choice(_VIEWPORTS)
@@ -855,6 +890,9 @@ class BrowserClient:
             initial_wait = int(_gaussian_delay(center=2.5, stddev=0.8, lo=1.5, hi=5.0) * 1000)
             await page.wait_for_timeout(initial_wait)
 
+            # Wait for Cloudflare Turnstile challenge to resolve
+            await self._wait_for_cloudflare(page)
+
             # Dismiss cookie consent popups (blocks content on many EU sites)
             await self._dismiss_cookie_consent(page)
 
@@ -944,6 +982,89 @@ class BrowserClient:
             return html, captured
         finally:
             await context.close()
+
+    # ------------------------------------------------------------------
+    # Cloudflare Turnstile challenge wait
+    # ------------------------------------------------------------------
+    async def _wait_for_cloudflare(self, page, max_wait: float = 8.0) -> None:
+        """Detect and wait for Cloudflare Turnstile challenge to resolve.
+
+        Checks if the page title indicates a Cloudflare challenge page
+        ("Un momento", "Just a moment", etc.), tries to click the Turnstile
+        checkbox, and polls until the challenge resolves or max_wait elapses.
+        """
+        try:
+            title = await page.title()
+        except Exception:
+            return
+
+        cf_titles = ("un momento", "just a moment", "checking your browser")
+        if not any(t in title.lower() for t in cf_titles):
+            return
+
+        logger.info("Cloudflare challenge detectado, intentando resolver...")
+        start = time.monotonic()
+
+        # Try to click the Turnstile checkbox inside its iframe
+        clicked = False
+        for attempt in range(3):
+            try:
+                # Turnstile renders inside an iframe from challenges.cloudflare.com
+                cf_frame = None
+                for frame in page.frames:
+                    if "challenges.cloudflare.com" in frame.url:
+                        cf_frame = frame
+                        break
+
+                if cf_frame:
+                    # The checkbox is typically an input or div inside the iframe
+                    checkbox = cf_frame.locator("input[type='checkbox']").first
+                    if await checkbox.is_visible(timeout=2000):
+                        await checkbox.click(timeout=3000)
+                        clicked = True
+                        logger.info("Turnstile checkbox clicked (attempt %d)", attempt + 1)
+                        break
+                    # Alternative: click the body/label of the challenge
+                    label = cf_frame.locator("label").first
+                    if await label.is_visible(timeout=1000):
+                        await label.click(timeout=2000)
+                        clicked = True
+                        logger.info("Turnstile label clicked (attempt %d)", attempt + 1)
+                        break
+            except Exception:
+                pass
+            await page.wait_for_timeout(2000)
+
+        if not clicked:
+            # Try clicking at the approximate location of the Turnstile widget
+            try:
+                widget = await page.query_selector("iframe[src*='challenges.cloudflare']")
+                if widget:
+                    box = await widget.bounding_box()
+                    if box:
+                        # Click center of the iframe (where checkbox typically is)
+                        await page.mouse.click(
+                            box["x"] + box["width"] / 2,
+                            box["y"] + box["height"] / 2,
+                        )
+                        logger.info("Turnstile iframe clicked at center")
+            except Exception:
+                pass
+
+        # Poll until the title changes (challenge resolved)
+        while time.monotonic() - start < max_wait:
+            await page.wait_for_timeout(1000)
+            try:
+                title = await page.title()
+            except Exception:
+                return
+            if not any(t in title.lower() for t in cf_titles):
+                elapsed = time.monotonic() - start
+                logger.info("Cloudflare challenge resuelto en %.1fs", elapsed)
+                await page.wait_for_timeout(2000)
+                return
+
+        logger.warning("Cloudflare challenge NO resuelto tras %.0fs", max_wait)
 
     # ------------------------------------------------------------------
     # Cookie consent auto-dismiss
