@@ -155,20 +155,11 @@ async def run_cycle(
                 db.mark_sent([deal.id])
             deals_sent += 1
 
-    # --- Detección de precios absurdamente bajos (sin descuento marcado) ---
-    absurd_deals = detect_absurdly_cheap(
-        all_raw_deals, db=db, min_observations=min_observations,
-    )
-    for deal in absurd_deals:
-        if deals_sent >= max_per_cycle:
-            logger.info("Límite de alertas alcanzado (%d), parando envíos", max_per_cycle)
-            break
-        if deal.id is not None and db.is_sent(deal.id):
-            continue
-        await telegram_bot.send_deal_immediate(deal)
-        if deal.id is not None:
-            db.mark_sent([deal.id])
-        deals_sent += 1
+    # --- Detección de precios absurdamente bajos — DESACTIVADO ---
+    # Genera demasiados falsos positivos: asigna precio original sintético
+    # basado en percentiles de la tienda (P5), lo cual no refleja el valor
+    # real del producto. Ejemplo: SSD de 48€ en Coolmod → "original 200€".
+    # Las ofertas reales se detectan por verify_real_deals y check_watchlist.
 
     # --- Filtros básicos ---
     all_deals = apply_filters(all_raw_deals, filters_cfg)
