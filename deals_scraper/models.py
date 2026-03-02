@@ -43,6 +43,7 @@ class StoreConfig:
     scrape_urls: list[str]
     client_type: str  # "http" o "browser"
     force_stealth: bool = False  # Forzar modo stealth aunque speed_mode=fast
+    proxy_url: str | None = None  # Proxy override per-store
 
     @classmethod
     def from_dict(cls, data: dict) -> StoreConfig:
@@ -53,4 +54,5 @@ class StoreConfig:
             scrape_urls=data.get("scrape_urls", []),
             client_type=data.get("client_type", "http"),
             force_stealth=data.get("force_stealth", False),
+            proxy_url=data.get("proxy_url"),
         )

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Deals Scraper{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <h3>{{ total }}</h3>
+        <p>Ofertas totales</p>
+    </div>
+    <div class="stat-card">
+        <h3>{{ stores }}</h3>
+        <p>Tiendas</p>
+    </div>
+    <div class="stat-card">
+        <h3>{{ sent }}</h3>
+        <p>Enviadas a Telegram</p>
+    </div>
+    <div class="stat-card">
+        <h3>{{ history }}</h3>
+        <p>Observaciones de precio</p>
+    </div>
+</div>
+
+<h2>Ofertas recientes</h2>
+{% if recent %}
+<table>
+    <thead>
+        <tr>
+            <th>Producto</th>
+            <th>Precio</th>
+            <th>Descuento</th>
+            <th>Tienda</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for d in recent %}
+        <tr>
+            <td><a href="/deal/{{ d.id }}">{{ d.title[:70] }}</a></td>
+            <td>{{ "%.2f"|format(d.current_price) }}&euro;</td>
+            <td class="discount">{% if d.discount_pct > 0 %}-{{ "%.0f"|format(d.discount_pct) }}%{% endif %}</td>
+            <td>{{ d.store }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No hay ofertas recientes.</p>
+{% endif %}
+{% endblock %}

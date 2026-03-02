@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Ofertas — Deals Scraper{% endblock %}
+{% block content %}
+<h1>Ofertas</h1>
+
+<form method="get" action="/deals">
+    <input type="text" name="q" placeholder="Buscar..." value="{{ q }}">
+    <button type="submit">Buscar</button>
+</form>
+
+{% if deals %}
+<table>
+    <thead>
+        <tr>
+            <th>Producto</th>
+            <th>Precio</th>
+            <th>Original</th>
+            <th>Descuento</th>
+            <th>Tienda</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for d in deals %}
+        <tr>
+            <td><a href="/deal/{{ d.id }}">{{ d.title[:70] }}</a></td>
+            <td>{{ "%.2f"|format(d.current_price) }}&euro;</td>
+            <td>{% if d.original_price %}{{ "%.2f"|format(d.original_price) }}&euro;{% else %}-{% endif %}</td>
+            <td class="discount">{% if d.discount_pct > 0 %}-{{ "%.0f"|format(d.discount_pct) }}%{% endif %}</td>
+            <td>{{ d.store }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="/deals?q={{ q }}&page={{ page - 1 }}">&laquo; Anterior</a>
+    {% endif %}
+    <span>P&aacute;gina {{ page }}</span>
+    {% if deals|length == 25 %}
+    <a href="/deals?q={{ q }}&page={{ page + 1 }}">Siguiente &raquo;</a>
+    {% endif %}
+</div>
+{% else %}
+<p>No se encontraron ofertas.</p>
+{% endif %}
+{% endblock %}

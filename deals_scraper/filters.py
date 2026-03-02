@@ -28,7 +28,7 @@ def calculate_discount(current: float, original: float | None) -> float:
 
 
 def apply_filters(deals: list[Deal], filters_cfg: dict[str, Any]) -> list[Deal]:
-    """Aplica filtros básicos: descuento, precio, keywords, categorías.
+    """Aplica filtros básicos: descuento, precio, keywords, categorías, marcas.
 
     NOTA: Este filtro usa el descuento que dice la tienda. Para verificar
     que el descuento es real, usar verify_real_deals() después.
@@ -38,6 +38,7 @@ def apply_filters(deals: list[Deal], filters_cfg: dict[str, Any]) -> list[Deal]:
     price_max = filters_cfg.get("price_max", float("inf"))
     keywords = [kw.lower() for kw in filters_cfg.get("keywords", [])]
     categories = [cat.lower() for cat in filters_cfg.get("categories", [])]
+    exclude_keywords = [kw.lower() for kw in filters_cfg.get("exclude_keywords", [])]
 
     filtered: list[Deal] = []
 
@@ -54,9 +55,20 @@ def apply_filters(deals: list[Deal], filters_cfg: dict[str, Any]) -> list[Deal]:
         if deal.current_price < price_min or deal.current_price > price_max:
             continue
 
+        title_lower = deal.title.lower()
+
+        # Filtro de keywords excluidas (basura, cosméticos, ropa, etc.)
+        if exclude_keywords and any(kw in title_lower for kw in exclude_keywords):
+            continue
+
+        # Filtro de marca: en tiendas con precios inflados (Amazon, eBay...),
+        # solo pasar productos de marcas reconocidas con buena salida.
+        # Evita "Smartwatch Hombre Militar 1.85 pulgadas" chino a "60% off".
+        if deal.store in _INFLATED_PRICE_STORES and not _has_known_brand(title_lower):
+            continue
+
         # Filtro de keywords (si hay keywords configuradas)
         if keywords:
-            title_lower = deal.title.lower()
             if not any(kw in title_lower for kw in keywords):
                 continue
 
@@ -91,15 +103,103 @@ def classify_deal(real_discount: float, price_error_threshold: float = 50.0) -> 
     return "NORMAL"
 
 
+# ------------------------------------------------------------------
+# Marcas reconocidas con buena salida — productos deseables
+# ------------------------------------------------------------------
+_KNOWN_BRANDS = {
+    # Apple / Mac
+    "apple", "iphone", "ipad", "macbook", "airpods", "apple watch", "imac",
+    "mac mini", "mac studio", "mac pro", "homepod",
+    # Samsung
+    "samsung", "galaxy",
+    # Sony
+    "sony", "playstation", "ps5", "dualsense", "bravia", "wh-1000",
+    # Nintendo
+    "nintendo", "switch",
+    # Microsoft / Xbox
+    "microsoft", "xbox", "surface",
+    # Google
+    "google", "pixel", "chromecast", "nest",
+    # Smartphones
+    "xiaomi", "redmi", "poco", "oneplus", "oppo", "realme", "huawei",
+    "motorola", "nothing phone",
+    # PC / Componentes
+    "nvidia", "rtx", "gtx", "geforce", "amd", "ryzen", "radeon",
+    "intel core", "core i5", "core i7", "core i9",
+    "asus", "msi", "gigabyte", "corsair", "kingston", "crucial", "seagate",
+    "western digital", "sandisk", "sabrent", "samsung evo", "samsung pro",
+    # Portátiles
+    "lenovo", "thinkpad", "ideapad", "dell", "latitude", "xps", "inspiron",
+    "hp elitebook", "hp probook", "hp pavilion", "hp envy", "hp spectre",
+    "hp omen", "hp victus",
+    "acer", "aspire", "predator", "razer", "framework",
+    # Monitores / TV
+    "lg oled", "lg nanocell", "lg ultragear", "lg gram",
+    "benq", "viewsonic", "philips", "hisense", "tcl",
+    # Audio
+    "bose", "sennheiser", "jabra", "jbl", "marshall", "bang & olufsen",
+    "shure", "audio-technica", "beyerdynamic", "sonos",
+    # Gaming
+    "logitech", "steelseries", "hyperx", "roccat", "razer",
+    # Periféricos
+    "cherry", "keychron", "ducky",
+    # Electrodomésticos premium
+    "dyson", "roomba", "irobot", "roborock", "dreame", "ecovacs",
+    "thermomix", "kitchenaid", "nespresso", "delonghi", "sage", "breville",
+    "ninja", "vitamix",
+    # Wearables / Fitness
+    "garmin", "fitbit", "polar", "suunto", "whoop", "oura",
+    # Fotografía / Drones
+    "canon", "nikon", "sony alpha", "fujifilm", "gopro", "dji", "insta360",
+    # Networking
+    "ubiquiti", "unifi", "synology", "qnap", "tp-link", "netgear", "asus router",
+    # E-readers
+    "kindle", "kobo",
+    # Movilidad
+    "segway", "ninebot", "xiaomi scooter",
+}
+
+
+_KNOWN_BRANDS_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(b.strip()) for b in _KNOWN_BRANDS) + r')\b',
+    re.IGNORECASE,
+)
+
+
+def _has_known_brand(title_lower: str) -> bool:
+    """Comprueba si el título contiene una marca reconocida (word boundary)."""
+    return bool(_KNOWN_BRANDS_RE.search(title_lower))
+
+
 # Tiendas de reacondicionados: su "original_price" es el precio de nuevo
 # (hace años), no el valor real actual. No confiar en su descuento para bypass.
-_REFURBISHED_STORES = {"backmarket", "apple", "cex"}
+_REFURBISHED_STORES = {"backmarket", "apple", "cex", "infocomputer"}
+
+# Tiendas donde los vendedores inflan original_price de forma sistemática.
+# No confiar en su descuento para bypass de primera detección.
+_INFLATED_PRICE_STORES = {"amazon", "aliexpress", "ebay", "miravia", "lifeinformatica"}
 
 # Keywords en título que indican producto reacondicionado (cualquier tienda)
 _REFURBISHED_KEYWORDS = (
     "reacondicionado", "renewed", "refurbished", "remanufactured",
     "seminuevo", "segunda mano", "used", "como nuevo",
 )
+
+
+# Keywords globales de accesorios — filtrar en todo el pipeline
+_GLOBAL_ACCESSORY_KEYWORDS = (
+    "funda ", "carcasa ", "protector de pantalla", "cristal templado",
+    "cable usb", "cable lightning", "cable tipo c",
+    "correa para ", "correa de repuesto",
+    "almohadilla", "ear tip", "recambio", "repuesto",
+    "pegatina", "skin ", "film protector",
+)
+
+
+def _is_accessory_title(title: str) -> bool:
+    """Detecta si un título es claramente un accesorio (funda, cable, etc.)."""
+    t = title.lower()
+    return any(kw in t for kw in _GLOBAL_ACCESSORY_KEYWORDS)
 
 
 def _is_refurbished(deal: Deal) -> bool:
@@ -144,27 +244,49 @@ def verify_real_deals(
     fake_count = 0
 
     for deal in deals:
+        # Filtro global anti-accesorio: descartar fundas, carcasas, cables, etc.
+        if _is_accessory_title(deal.title):
+            continue
         stats = db.get_price_stats_by_url(deal.url)
 
         # Producto nuevo — no tenemos historial
         if stats is None or stats["observations"] < min_observations:
             # Bypass: posible error de precio — alertar inmediatamente
-            # NO aplica a tiendas de reacondicionados (su original_price es
-            # el precio de nuevo hace años, no el valor real actual)
+            # Requisitos estrictos para evitar falsos positivos:
+            # 1. NO tiendas de reacondicionados
+            # 2. NO tiendas con precios inflados conocidos (Amazon marketplace)
+            # 3. Descuento ≥ threshold Y ratio < 10
+            # 4. Ahorro absoluto ≥ 50€ (evitar basura barata)
+            # 5. Precio mínimo ≥ 30€ (evitar accesorios)
+            # 6. Tiene market_price que confirme el descuento
             if (not _is_refurbished(deal)
-                    and deal.original_price and deal.original_price > deal.current_price):
+                    and deal.store not in _INFLATED_PRICE_STORES
+                    and deal.original_price and deal.original_price > deal.current_price
+                    and deal.current_price >= 30):
                 calculated_discount = (1 - deal.current_price / deal.original_price) * 100
                 price_ratio = deal.original_price / deal.current_price
-                if calculated_discount >= price_error_threshold and price_ratio < 10:
-                    # Usar el descuento calculado, no el del badge
+                absolute_savings = deal.original_price - deal.current_price
+                if (calculated_discount >= price_error_threshold
+                        and price_ratio < 10
+                        and absolute_savings >= 50):
+                    # Si tiene market_price, verificar contra él
+                    if deal.market_price:
+                        market_discount = (1 - deal.current_price / deal.market_price) * 100
+                        if market_discount < price_error_threshold * 0.5:
+                            new_count += 1
+                            logger.debug(
+                                "DESCARTADO: %s — descuento tienda %.0f%% pero market only %.0f%%",
+                                deal.title[:50], calculated_discount, market_discount,
+                            )
+                            continue
                     deal.discount_pct = round(calculated_discount, 1)
                     tier = classify_deal(deal.discount_pct, price_error_threshold)
                     deal.alert_tier = tier
                     logger.warning(
                         "POSIBLE ERROR DE PRECIO (1ª detección): %s — %.2f€ "
-                        "(original: %.2f€, descuento real: %.0f%%)",
+                        "(original: %.2f€, descuento real: %.0f%%, ahorro: %.0f€)",
                         deal.title[:50], deal.current_price,
-                        deal.original_price, deal.discount_pct,
+                        deal.original_price, deal.discount_pct, absolute_savings,
                     )
                     verified.append(deal)
                     continue
@@ -226,8 +348,8 @@ def verify_real_deals(
 # Tiendas que venden productos muy baratos de forma habitual
 _CHEAP_STORES = {"aliexpress", "ebay", "lidl", "ikea", "miravia"}
 
-_MIN_STORE_PRODUCTS = 30      # Mínimo de productos para comparar a nivel tienda
-_MIN_CATEGORY_PRODUCTS = 10   # Mínimo de productos para comparar a nivel categoría
+_MIN_STORE_PRODUCTS = 50      # Mínimo de productos para comparar a nivel tienda
+_MIN_CATEGORY_PRODUCTS = 15   # Mínimo de productos para comparar a nivel categoría
 
 
 def detect_absurdly_cheap(
@@ -268,11 +390,18 @@ def detect_absurdly_cheap(
         ref_label = ""
         ref_p5 = 0.0
 
-        # Tier 1: store + category
-        if deal.category:
+        # Tier 0: marca reconocida a precio absurdo (< 50€ para producto premium)
+        # Un MacBook a 10€, unas AirPods a 3€, una RTX a 5€ — siempre alertar
+        if _has_known_brand(deal.title.lower()) and deal.current_price < 50:
+            flagged = True
+            ref_label = f"{deal.store}/marca_premium"
+            ref_p5 = 200.0  # Estimación conservadora
+
+        # Tier 1: store + category — precio < 10% del P5
+        if not flagged and deal.category:
             ref = db.get_store_price_percentiles(deal.store, deal.category)
             if ref and ref["count"] >= _MIN_CATEGORY_PRODUCTS:
-                threshold = ref["p5"] * 0.2
+                threshold = ref["p5"] * 0.10
                 if threshold > 0 and deal.current_price < threshold:
                     flagged = True
                     ref_label = f"{deal.store}/{deal.category}"
@@ -284,7 +413,7 @@ def detect_absurdly_cheap(
             if ref is None or ref["count"] < _MIN_STORE_PRODUCTS:
                 continue
 
-            multiplier = 0.1 if deal.store in _CHEAP_STORES else 0.3
+            multiplier = 0.03 if deal.store in _CHEAP_STORES else 0.08
             threshold = ref["p5"] * multiplier
 
             if threshold <= 0 or deal.current_price >= threshold:
@@ -480,15 +609,15 @@ def check_watchlist(
     deals: list[Deal],
     watchlist_cfg: dict,
     min_discount: float = 45.0,
+    db: Database | None = None,
 ) -> list[Deal]:
     """Busca deals que coincidan con la watchlist del usuario.
 
     Matching estricto: substring exacto (case-insensitive) con validación
-    de contexto para evitar falsos positivos (ej: "PS5" en "Auriculares PC/PS5"
-    no matchea porque PS5 aparece como compatibilidad, no como producto).
+    de contexto para evitar falsos positivos.
 
-    Si matchea Y el precio actual ≤ max_price Y el descuento ≥ min_discount
-    → marca como CHOLLO (o ERROR_DE_PRECIO si < 50% de max_price).
+    Si se pasa db, los productos de la watchlist dinámica (SQLite) se
+    unen con los del YAML.
 
     Returns:
         Lista de deals que matchean la watchlist y cumplen el precio.
@@ -496,12 +625,21 @@ def check_watchlist(
     if not watchlist_cfg.get("enabled", False):
         return []
 
-    products = watchlist_cfg.get("products", [])
+    products = list(watchlist_cfg.get("products", []))
+
+    # Merge con watchlist dinámica de la BD
+    if db is not None:
+        db_items = db.get_watchlist_items()
+        yaml_names = {p["name"].lower() for p in products}
+        for item in db_items:
+            if item["name"].lower() not in yaml_names:
+                products.append(item)
+
     if not products:
         return []
 
     matched: list[Deal] = []
-    seen_urls: set[str] = set()  # Evitar duplicados
+    seen_urls: set[str] = set()
 
     for deal in deals:
         if deal.url in seen_urls:
@@ -519,42 +657,67 @@ def check_watchlist(
                 continue
             if deal.current_price < min_price:
                 continue
-
-            # Rechazar si el título contiene alguna keyword excluida
             if any(kw in title_lower for kw in exclude_kws):
                 continue
 
-            discount = round((1 - deal.current_price / max_price) * 100, 1)
+            # Calcular descuentos: el de la tienda (real) vs el del watchlist
+            store_discount = 0.0
+            if deal.original_price and deal.original_price > deal.current_price:
+                store_discount = round(
+                    (1 - deal.current_price / deal.original_price) * 100, 1
+                )
+            watchlist_discount = round(
+                (1 - deal.current_price / max_price) * 100, 1
+            )
+            refurbished = _is_refurbished(deal)
 
-            # Respetar umbral mínimo de descuento
-            if discount < min_discount:
-                continue
+            # --- Vía 1: La tienda muestra descuento significativo (≥30%) ---
+            if store_discount >= 30 and not refurbished:
+                if store_discount < min_discount:
+                    continue
+                if deal.current_price < max_price * 0.25:
+                    deal.alert_tier = "ERROR_DE_PRECIO"
+                elif store_discount >= 60:
+                    deal.alert_tier = "ERROR_DE_PRECIO"
+                else:
+                    deal.alert_tier = "CHOLLO"
+                deal.discount_pct = store_discount
+                # Mantener original_price de la tienda
 
-            # Match: precio dentro del umbral
-            # Tiendas de reacondicionados tienen precios bajos por defecto,
-            # no confundir con errores de precio
-            if (deal.current_price < max_price * 0.5
-                    and not _is_refurbished(deal)):
+            # --- Vía 2: Precio absurdamente bajo (error de precio) ---
+            elif deal.current_price < max_price * 0.25 and not refurbished:
                 deal.alert_tier = "ERROR_DE_PRECIO"
-            else:
-                deal.alert_tier = "CHOLLO"
-            deal.discount_pct = discount
-            # Tiendas de reacondicionados: su original_price es el precio
-            # de retail cuando nuevo (hace años), no el valor real actual.
-            # No mostrarlo para no engañar.
-            if _is_refurbished(deal):
-                deal.original_price = None
-            else:
+                deal.discount_pct = watchlist_discount
                 deal.original_price = deal.original_price or max_price
 
+            # --- Vía 3: Tienda de reacondicionados ---
+            elif refurbished:
+                if watchlist_discount < min_discount:
+                    continue
+                deal.alert_tier = "CHOLLO"
+                deal.discount_pct = watchlist_discount
+                deal.original_price = None  # No mostrar MSRP viejo
+
+            # --- No es un chollo real: descuento bajo o modelo barato ---
+            else:
+                logger.debug(
+                    "WATCHLIST SKIP %s: %s — %.2f€ (store_disc=%.0f%%, "
+                    "wl_disc=%.0f%%, no vía aplica)",
+                    product["name"], deal.title[:50],
+                    deal.current_price, store_discount, watchlist_discount,
+                )
+                continue
+
             logger.info(
-                "WATCHLIST %s: %s — %.2f€ (max: %.2f€, tier: %s)",
+                "WATCHLIST %s: %s — %.2f€ (max: %.2f€, tier: %s, "
+                "store_disc=%.0f%%, wl_disc=%.0f%%)",
                 product["name"], deal.title[:50],
                 deal.current_price, max_price, deal.alert_tier,
+                store_discount, watchlist_discount,
             )
             matched.append(deal)
             seen_urls.add(deal.url)
-            break  # Un deal solo matchea una vez
+            break
 
     if matched:
         logger.info("Watchlist: %d productos encontrados a buen precio", len(matched))
@@ -581,6 +744,7 @@ def _is_watchlist_match(name_lower: str, title_lower: str) -> bool:
     - Rechaza matches precedidos por "para ", "compatible con ", etc.
     - Rechaza títulos que empiezan con prefijos de accesorios (funda, cargador...)
     - Rechaza matches en la parte final del título (>50% del largo)
+    - Rechaza si hay un "para " en cualquier lugar antes del match
     """
     pos = title_lower.find(name_lower)
     if pos == -1:
@@ -593,6 +757,16 @@ def _is_watchlist_match(name_lower: str, title_lower: str) -> bool:
     # Rechazar si precedido por indicadores de compatibilidad
     prefix = title_lower[:pos]
     if any(prefix.endswith(cp) for cp in _COMPAT_PREFIXES):
+        return False
+
+    # Rechazar si "para " / "for " aparece en cualquier parte antes del match
+    # Ejemplo: "Almohadillas para Airpods Pro y Airpods Pro 2"
+    # El "para " indica que es un accesorio para el producto, no el producto.
+    if " para " in prefix or prefix.startswith("para "):
+        return False
+    if " for " in prefix or prefix.startswith("for "):
+        return False
+    if " compatible " in prefix or prefix.startswith("compatible "):
         return False
 
     # Rechazar si el título empieza con un prefijo de accesorio
@@ -646,3 +820,55 @@ def detect_cross_store_bargains(
     if pairs:
         logger.info("Cross-store: %d chollos encontrados comparando tiendas", len(pairs))
     return pairs
+
+
+# ------------------------------------------------------------------
+# Detectar bajadas de precio significativas vs mediana histórica
+# ------------------------------------------------------------------
+def detect_price_drops(
+    deals: list[Deal],
+    db: Database,
+    drop_threshold: float = 20.0,
+    min_observations: int = 3,
+) -> list[Deal]:
+    """Detecta deals con bajada significativa respecto a su mediana histórica.
+
+    Args:
+        deals: Deals a analizar.
+        db: Base de datos con historial.
+        drop_threshold: % mínimo de bajada vs mediana para alertar.
+        min_observations: Mínimo de observaciones de precio necesarias.
+
+    Returns:
+        Lista de deals con bajada significativa, con alert_tier="BAJADA_PRECIO".
+    """
+    drops: list[Deal] = []
+
+    for deal in deals:
+        if deal.id is None:
+            continue
+        stats = db.get_price_stats(deal.id)
+        if stats is None:
+            continue
+        if stats["observations"] < min_observations:
+            continue
+
+        median = stats["median"]
+        current = deal.current_price
+        if median <= 0 or current >= median:
+            continue
+
+        drop_pct = round((1 - current / median) * 100, 1)
+        if drop_pct >= drop_threshold:
+            deal.alert_tier = "BAJADA_PRECIO"
+            deal.original_price = median
+            deal.discount_pct = drop_pct
+            drops.append(deal)
+            logger.info(
+                "BAJADA PRECIO: %s — %.2f€ (mediana: %.2f€, bajada: -%.1f%%)",
+                deal.title[:50], current, median, drop_pct,
+            )
+
+    if drops:
+        logger.info("Bajadas de precio: %d productos con bajada significativa", len(drops))
+    return drops

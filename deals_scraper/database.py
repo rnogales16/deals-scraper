@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS market_prices (
 );
 """
 
+_CREATE_WATCHLIST = """
+CREATE TABLE IF NOT EXISTS watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    max_price REAL NOT NULL,
+    min_price REAL DEFAULT 0,
+    exclude_keywords TEXT DEFAULT '[]',
+    added_at TEXT NOT NULL
+);
+"""
+
 
 class Database:
     """Gestiona la base de datos SQLite de ofertas."""
@@ -66,9 +77,11 @@ class Database:
 
     def _init_tables(self) -> None:
         cur = self.conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
         cur.execute(_CREATE_DEALS)
         cur.execute(_CREATE_PRICE_HISTORY)
         cur.execute(_CREATE_MARKET_PRICES)
+        cur.execute(_CREATE_WATCHLIST)
         # Índices para acelerar queries frecuentes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_store_cat ON deals(store, category)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_updated ON deals(updated_at)")
@@ -76,6 +89,7 @@ class Database:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ph_deal ON price_history(deal_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mp_title ON market_prices(normalized_title)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mp_expires ON market_prices(expires_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_name ON watchlist(name)")
         self.conn.commit()
 
     # ------------------------------------------------------------------
@@ -547,6 +561,126 @@ class Database:
             len(pairs), len(multi_store_groups),
         )
         return pairs
+
+    # ------------------------------------------------------------------
+    # Búsquedas para comandos de Telegram
+    # ------------------------------------------------------------------
+    def search_deals(self, keyword: str, limit: int = 5) -> list[Deal]:
+        """Busca deals por keyword en el título."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """SELECT * FROM deals
+               WHERE title LIKE ?
+               ORDER BY discount_pct DESC
+               LIMIT ?""",
+            (f"%{keyword}%", limit),
+        )
+        return [self._row_to_deal(r) for r in cur.fetchall()]
+
+    def get_recent_deals(self, hours: int = 24, limit: int = 10) -> list[Deal]:
+        """Deals actualizados en las últimas N horas."""
+        from datetime import timedelta
+
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            """SELECT * FROM deals
+               WHERE updated_at >= ? AND discount_pct > 0
+               ORDER BY updated_at DESC
+               LIMIT ?""",
+            (cutoff, limit),
+        )
+        return [self._row_to_deal(r) for r in cur.fetchall()]
+
+    def get_top_deals_since(self, hours: int = 24, limit: int = 10) -> list[Deal]:
+        """Top deals por descuento en las últimas N horas."""
+        from datetime import timedelta
+
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            """SELECT * FROM deals
+               WHERE updated_at >= ? AND discount_pct > 0
+               ORDER BY discount_pct DESC
+               LIMIT ?""",
+            (cutoff, limit),
+        )
+        return [self._row_to_deal(r) for r in cur.fetchall()]
+
+    def get_price_history(self, deal_id: int) -> list[dict[str, Any]]:
+        """Historial de precios de un deal."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT price, detected_at FROM price_history WHERE deal_id = ? ORDER BY detected_at",
+            (deal_id,),
+        )
+        return [{"price": r["price"], "detected_at": r["detected_at"]} for r in cur.fetchall()]
+
+    def get_deal_by_id(self, deal_id: int) -> Deal | None:
+        """Obtiene un deal por su ID."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM deals WHERE id = ?", (deal_id,))
+        row = cur.fetchone()
+        return self._row_to_deal(row) if row else None
+
+    def get_store_stats(self) -> list[dict[str, Any]]:
+        """Estadísticas por tienda."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """SELECT store,
+                      COUNT(*) as count,
+                      ROUND(AVG(discount_pct), 1) as avg_discount,
+                      MAX(updated_at) as last_update
+               FROM deals
+               GROUP BY store
+               ORDER BY count DESC""",
+        )
+        return [
+            {
+                "store": r["store"],
+                "count": r["count"],
+                "avg_discount": r["avg_discount"],
+                "last_update": r["last_update"],
+            }
+            for r in cur.fetchall()
+        ]
+
+    # ------------------------------------------------------------------
+    # Watchlist dinámica (SQLite)
+    # ------------------------------------------------------------------
+    def add_watchlist_item(self, name: str, max_price: float, min_price: float = 0) -> int:
+        """Añade un producto a la watchlist. Retorna el ID."""
+        now = datetime.utcnow().isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            """INSERT OR REPLACE INTO watchlist (name, max_price, min_price, added_at)
+               VALUES (?, ?, ?, ?)""",
+            (name, max_price, min_price, now),
+        )
+        self.conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    def remove_watchlist_item(self, name: str) -> bool:
+        """Elimina un producto de la watchlist. Retorna True si existía."""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM watchlist WHERE LOWER(name) = LOWER(?)", (name,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def get_watchlist_items(self) -> list[dict[str, Any]]:
+        """Retorna todos los productos de la watchlist dinámica."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM watchlist ORDER BY added_at DESC")
+        import json
+        return [
+            {
+                "name": r["name"],
+                "max_price": r["max_price"],
+                "min_price": r["min_price"],
+                "exclude_keywords": json.loads(r["exclude_keywords"]) if r["exclude_keywords"] else [],
+            }
+            for r in cur.fetchall()
+        ]
 
     # ------------------------------------------------------------------
     # Helpers

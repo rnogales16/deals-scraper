@@ -343,19 +343,23 @@ class HttpClient:
             logger.debug("UA asignado a %s: %s", domain, self._domain_ua[domain].browser)
         return self._domain_ua[domain]
 
-    def _get_client(self, domain: str) -> httpx.AsyncClient:
-        """Return (creating if needed) the persistent AsyncClient for *domain*."""
-        if domain not in self._domain_clients:
-            proxy_arg = self._proxy_url if self._proxy_url else None
-            self._domain_clients[domain] = httpx.AsyncClient(
+    def _get_client(self, domain: str, proxy_override: str | None = None) -> httpx.AsyncClient:
+        """Return (creating if needed) the persistent AsyncClient for *domain*.
+
+        If proxy_override is provided, a separate client keyed by (domain, proxy_url)
+        is created so that per-store proxies don't interfere with each other.
+        """
+        cache_key = f"{domain}|{proxy_override}" if proxy_override else domain
+        if cache_key not in self._domain_clients:
+            proxy_arg = proxy_override or self._proxy_url or None
+            self._domain_clients[cache_key] = httpx.AsyncClient(
                 transport=httpx.AsyncHTTPTransport(retries=0),
                 proxy=proxy_arg,
                 timeout=httpx.Timeout(30.0),
                 follow_redirects=True,
-                # httpx automatically manages cookies via its CookieJar
             )
-            logger.debug("Nuevo cliente creado para dominio: %s", domain)
-        return self._domain_clients[domain]
+            logger.debug("Nuevo cliente creado para dominio: %s (proxy: %s)", domain, proxy_arg)
+        return self._domain_clients[cache_key]
 
     # ------------------------------------------------------------------
     # Rate limiter per domain
@@ -432,7 +436,7 @@ class HttpClient:
     # Core fetch with retries and exponential backoff
     # ------------------------------------------------------------------
 
-    async def fetch(self, url: str, prime: bool = True) -> str:
+    async def fetch(self, url: str, prime: bool = True, proxy_override: str | None = None) -> str:
         """Fetch *url* and return the response body as a string.
 
         Parameters
@@ -443,6 +447,9 @@ class HttpClient:
             When True (default) the client will visit the domain homepage first
             if it hasn't done so yet, building a natural referrer chain and
             picking up any consent/session cookies.
+        proxy_override:
+            Optional per-store proxy URL. If provided, uses a separate client
+            with this proxy instead of the global one.
         """
         parsed = urlparse(url)
         domain = parsed.netloc
@@ -454,7 +461,7 @@ class HttpClient:
         await self._random_delay()
         await self._wait_for_rate_limit(domain)
 
-        client = self._get_client(domain)
+        client = self._get_client(domain, proxy_override=proxy_override)
         ua_meta = self._get_domain_ua(domain)
         headers = build_headers(url, ua_meta)
 

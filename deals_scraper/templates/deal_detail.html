@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ deal.title[:50] }} — Deals Scraper{% endblock %}
+{% block content %}
+<h1>{{ deal.title }}</h1>
+
+<p>
+    <strong>Precio actual:</strong> {{ "%.2f"|format(deal.current_price) }}&euro;
+    {% if deal.original_price %}
+    <br><strong>Precio original:</strong> {{ "%.2f"|format(deal.original_price) }}&euro;
+    {% endif %}
+    {% if deal.discount_pct > 0 %}
+    <br><strong>Descuento:</strong> <span class="discount">-{{ "%.0f"|format(deal.discount_pct) }}%</span>
+    {% endif %}
+    <br><strong>Tienda:</strong> {{ deal.store }}
+    <br><strong>Categor&iacute;a:</strong> {{ deal.category or "Sin categor&iacute;a" }}
+    <br><a href="{{ deal.url }}" target="_blank">Ver en tienda</a>
+</p>
+
+{% if history and history|length >= 2 %}
+<h2>Historial de precios</h2>
+<img src="/api/deal/{{ deal.id }}/chart" alt="Gr&aacute;fico de precios" style="max-width: 100%;">
+
+<details>
+    <summary>Datos ({{ history|length }} observaciones)</summary>
+    <table>
+        <thead>
+            <tr><th>Fecha</th><th>Precio</th></tr>
+        </thead>
+        <tbody>
+            {% for h in history %}
+            <tr>
+                <td>{{ h.detected_at[:16] }}</td>
+                <td>{{ "%.2f"|format(h.price) }}&euro;</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</details>
+{% else %}
+<p>A&uacute;n no hay suficiente historial de precios.</p>
+{% endif %}
+{% endblock %}

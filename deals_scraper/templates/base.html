@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Deals Scraper{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.min.css">
+    <style>
+        nav { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        nav a { text-decoration: none; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
+        .stat-card { background: var(--background-alt); padding: 1rem; border-radius: 6px; text-align: center; }
+        .stat-card h3 { margin: 0; font-size: 2rem; }
+        .stat-card p { margin: 0.25rem 0 0; opacity: 0.7; }
+        table { width: 100%; }
+        .discount { color: #4caf50; font-weight: bold; }
+        .pagination { display: flex; gap: 0.5rem; justify-content: center; margin: 1rem 0; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/">Inicio</a>
+        <a href="/deals">Ofertas</a>
+        <a href="/watchlist">Watchlist</a>
+        <a href="/stores">Tiendas</a>
+    </nav>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <p><small>Deals Scraper Dashboard</small></p>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Watchlist — Deals Scraper{% endblock %}
+{% block content %}
+<h1>Watchlist</h1>
+
+{% if items %}
+<table>
+    <thead>
+        <tr>
+            <th>Producto</th>
+            <th>Precio m&aacute;x.</th>
+            <th>Precio m&iacute;n.</th>
+            <th>A&ntilde;adido</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in items %}
+        <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ "%.0f"|format(item.max_price) }}&euro;</td>
+            <td>{{ "%.0f"|format(item.min_price) }}&euro;</td>
+            <td>{{ item.added_at[:10] if item.added_at else "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<p>Total: {{ items|length }} productos en watchlist din&aacute;mica.</p>
+{% else %}
+<p>La watchlist din&aacute;mica est&aacute; vac&iacute;a. A&ntilde;ade productos desde Telegram con <code>/watchlist add &lt;nombre&gt; &lt;precio&gt;</code>.</p>
+{% endif %}
+{% endblock %}

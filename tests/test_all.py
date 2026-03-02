@@ -333,8 +333,9 @@ class TestCheckWatchlist:
         assert result == []
 
     def test_substring_match(self):
-        """Match con descuento >= 45% vs max_price."""
-        deals = [_make_deal(title="Apple iPhone 15 128GB Azul Libre", current_price=300)]
+        """Match con store_discount >= 30% y >= min_discount."""
+        deals = [_make_deal(title="Apple iPhone 15 128GB Azul Libre",
+                            current_price=300, original_price=600)]
         cfg = {
             "enabled": True,
             "products": [{"name": "iPhone 15", "max_price": 600}],
@@ -363,8 +364,8 @@ class TestCheckWatchlist:
         assert result == []
 
     def test_error_de_precio_tier(self):
-        """Si el precio es < 50% del max_price, se marca como ERROR_DE_PRECIO."""
-        deals = [_make_deal(title="AirPods Pro", current_price=50)]
+        """Si el precio es < 25% del max_price, se marca como ERROR_DE_PRECIO."""
+        deals = [_make_deal(title="AirPods Pro", current_price=40)]
         cfg = {
             "enabled": True,
             "products": [{"name": "AirPods Pro", "max_price": 180}],
@@ -376,8 +377,10 @@ class TestCheckWatchlist:
     def test_no_duplicates(self):
         """El mismo URL no se matchea dos veces."""
         deals = [
-            _make_deal(title="iPhone 15 Pro", url="https://x.com/p1", current_price=200),
-            _make_deal(title="iPhone 15 Pro", url="https://x.com/p1", current_price=200),
+            _make_deal(title="iPhone 15 Pro", url="https://x.com/p1",
+                       current_price=200, original_price=600),
+            _make_deal(title="iPhone 15 Pro", url="https://x.com/p1",
+                       current_price=200, original_price=600),
         ]
         cfg = {
             "enabled": True,
@@ -416,7 +419,8 @@ class TestCheckWatchlist:
 
     def test_primary_product_matched(self):
         """'PS5' al inicio del título sí matchea (producto principal)."""
-        deals = [_make_deal(title="PS5 Slim 1TB Digital Edition", current_price=150)]
+        deals = [_make_deal(title="PS5 Slim 1TB Digital Edition",
+                            current_price=150, original_price=400)]
         cfg = {
             "enabled": True,
             "products": [{"name": "PS5", "max_price": 350}],
@@ -1479,9 +1483,9 @@ class TestTelegramBotSend:
         bot._bot = AsyncMock()
 
         deals = [
-            _make_deal(title="Deal 1", current_price=50, store="s", id=1,
+            _make_deal(title="Deal 1", url="https://x.com/1", current_price=50, store="s", id=1,
                        image_url="https://img.com/1.jpg"),
-            _make_deal(title="Deal 2", current_price=60, store="s", id=2),
+            _make_deal(title="Deal 2", url="https://x.com/2", current_price=60, store="s", id=2),
         ]
         sent_ids = await bot.send_deals(deals, max_per_cycle=10)
         assert sent_ids == [1, 2]
@@ -1580,6 +1584,7 @@ class TestPipelineIntegration:
 
         # Simular bajada de precio real en product0
         d_cheap = _make_deal(
+            title="Samsung Galaxy S24 128GB",
             url="https://x.com/product0",
             current_price=50.0,  # Era ~100, ahora 50
             original_price=100.0,
@@ -1603,7 +1608,7 @@ class TestPipelineIntegration:
         """Watchlist se procesa antes de apply_filters."""
         deals = [
             _make_deal(title="Apple iPhone 15 Pro 256GB", current_price=250,
-                       url="https://x.com/iphone15pro"),
+                       original_price=600, url="https://x.com/iphone15pro"),
             _make_deal(title="Random Product", current_price=50, discount_pct=5,
                        url="https://x.com/random"),
         ]
@@ -1613,7 +1618,7 @@ class TestPipelineIntegration:
             "products": [{"name": "iPhone 15", "max_price": 600}],
         }
 
-        # Watchlist capta el iPhone (250€ vs 600€ max = 58% descuento >= 45%)
+        # Watchlist capta el iPhone (store_disc=58%, >= min_discount 45%)
         wl = check_watchlist(deals, watchlist_cfg, min_discount=45.0)
         assert len(wl) == 1
         assert "iPhone" in wl[0].title
@@ -2157,3 +2162,262 @@ class TestLooksLikeProductUrl:
     def test_unknown_single_segment_passes(self):
         """Segmentos únicos desconocidos pasan (podrían ser productos)."""
         assert _looks_like_product_url("https://x.com/rtx-bundle-resident-evil/") is True
+
+
+# ===========================================================================
+# 18. NEW DATABASE METHODS (watchlist, search, recent, etc.)
+# ===========================================================================
+
+class TestDatabaseNewMethods:
+    """Tests para los nuevos métodos de database.py."""
+
+    def test_search_deals(self, tmp_db):
+        tmp_db.upsert_deal(_make_deal(title="iPhone 15 Pro 256GB", url="https://x.com/iphone15",
+                                       discount_pct=30))
+        tmp_db.upsert_deal(_make_deal(title="Samsung Galaxy S25", url="https://x.com/galaxy",
+                                       discount_pct=20))
+        results = tmp_db.search_deals("iPhone")
+        assert len(results) == 1
+        assert "iPhone" in results[0].title
+
+    def test_search_deals_empty(self, tmp_db):
+        results = tmp_db.search_deals("nonexistent")
+        assert results == []
+
+    def test_get_recent_deals(self, tmp_db):
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/recent1", discount_pct=25))
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/recent2", discount_pct=15))
+        results = tmp_db.get_recent_deals(hours=24, limit=10)
+        assert len(results) == 2
+
+    def test_get_top_deals_since(self, tmp_db):
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/top1", discount_pct=50))
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/top2", discount_pct=30))
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/top3", discount_pct=10))
+        results = tmp_db.get_top_deals_since(hours=24, limit=2)
+        assert len(results) == 2
+        assert results[0].discount_pct >= results[1].discount_pct
+
+    def test_get_price_history(self, tmp_db):
+        deal_id, _ = tmp_db.upsert_deal(_make_deal(url="https://x.com/ph1", current_price=100))
+        # Upsert again with different price
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/ph1", current_price=90))
+        history = tmp_db.get_price_history(deal_id)
+        assert len(history) >= 2
+        assert all("price" in h and "detected_at" in h for h in history)
+
+    def test_get_deal_by_id(self, tmp_db):
+        deal_id, _ = tmp_db.upsert_deal(_make_deal(url="https://x.com/byid", title="Find Me"))
+        deal = tmp_db.get_deal_by_id(deal_id)
+        assert deal is not None
+        assert deal.title == "Find Me"
+
+    def test_get_deal_by_id_not_found(self, tmp_db):
+        assert tmp_db.get_deal_by_id(99999) is None
+
+    def test_get_store_stats(self, tmp_db):
+        for i in range(3):
+            tmp_db.upsert_deal(_make_deal(url=f"https://x.com/s1-{i}", store="amazon", discount_pct=20))
+        for i in range(2):
+            tmp_db.upsert_deal(_make_deal(url=f"https://x.com/s2-{i}", store="mediamarkt", discount_pct=30))
+        stats = tmp_db.get_store_stats()
+        assert len(stats) == 2
+        names = [s["store"] for s in stats]
+        assert "amazon" in names
+        assert "mediamarkt" in names
+
+
+class TestDatabaseWatchlist:
+    """Tests para la watchlist dinámica en SQLite."""
+
+    def test_add_watchlist_item(self, tmp_db):
+        item_id = tmp_db.add_watchlist_item("RTX 5070", 500)
+        assert item_id is not None
+        items = tmp_db.get_watchlist_items()
+        assert len(items) == 1
+        assert items[0]["name"] == "RTX 5070"
+        assert items[0]["max_price"] == 500
+
+    def test_add_duplicate_replaces(self, tmp_db):
+        tmp_db.add_watchlist_item("RTX 5070", 500)
+        tmp_db.add_watchlist_item("RTX 5070", 600)
+        items = tmp_db.get_watchlist_items()
+        assert len(items) == 1
+        assert items[0]["max_price"] == 600
+
+    def test_remove_watchlist_item(self, tmp_db):
+        tmp_db.add_watchlist_item("RTX 5070", 500)
+        assert tmp_db.remove_watchlist_item("RTX 5070") is True
+        assert tmp_db.get_watchlist_items() == []
+
+    def test_remove_nonexistent(self, tmp_db):
+        assert tmp_db.remove_watchlist_item("nonexistent") is False
+
+    def test_watchlist_empty(self, tmp_db):
+        assert tmp_db.get_watchlist_items() == []
+
+    def test_wal_mode(self, tmp_db):
+        cur = tmp_db.conn.execute("PRAGMA journal_mode")
+        mode = cur.fetchone()[0]
+        assert mode == "wal"
+
+
+# ===========================================================================
+# 19. DETECT PRICE DROPS
+# ===========================================================================
+
+class TestDetectPriceDrops:
+    """Tests para detect_price_drops en filters.py."""
+
+    def test_price_drop_detected(self, tmp_db):
+        from deals_scraper.filters import detect_price_drops
+        # Create deal with history of high prices
+        d = _make_deal(url="https://x.com/drop1", current_price=200)
+        deal_id, _ = tmp_db.upsert_deal(d)
+        for price in [200, 195, 210, 200]:
+            tmp_db.conn.execute(
+                "INSERT INTO price_history (deal_id, price, detected_at) VALUES (?, ?, ?)",
+                (deal_id, price, datetime.utcnow().isoformat()),
+            )
+        # Now price drops to 150
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/drop1", current_price=150))
+        tmp_db.conn.commit()
+
+        deal = _make_deal(url="https://x.com/drop1", current_price=150, id=deal_id)
+        drops = detect_price_drops([deal], db=tmp_db, drop_threshold=20.0, min_observations=3)
+        assert len(drops) == 1
+        assert drops[0].alert_tier == "BAJADA_PRECIO"
+
+    def test_no_drop_when_price_stable(self, tmp_db):
+        from deals_scraper.filters import detect_price_drops
+        d = _make_deal(url="https://x.com/stable", current_price=100)
+        deal_id, _ = tmp_db.upsert_deal(d)
+        for price in [100, 102, 99, 101]:
+            tmp_db.conn.execute(
+                "INSERT INTO price_history (deal_id, price, detected_at) VALUES (?, ?, ?)",
+                (deal_id, price, datetime.utcnow().isoformat()),
+            )
+        tmp_db.conn.commit()
+
+        deal = _make_deal(url="https://x.com/stable", current_price=100, id=deal_id)
+        drops = detect_price_drops([deal], db=tmp_db, drop_threshold=20.0, min_observations=3)
+        assert len(drops) == 0
+
+    def test_insufficient_observations(self, tmp_db):
+        from deals_scraper.filters import detect_price_drops
+        d = _make_deal(url="https://x.com/few", current_price=50)
+        deal_id, _ = tmp_db.upsert_deal(d)
+        # Only 1 observation from upsert
+        deal = _make_deal(url="https://x.com/few", current_price=50, id=deal_id)
+        drops = detect_price_drops([deal], db=tmp_db, drop_threshold=20.0, min_observations=3)
+        assert len(drops) == 0
+
+
+# ===========================================================================
+# 20. CHARTS
+# ===========================================================================
+
+class TestCharts:
+    """Tests para generate_price_chart."""
+
+    def test_generate_chart(self):
+        from deals_scraper.charts import generate_price_chart
+        history = [
+            {"price": 100.0, "detected_at": "2026-01-01T10:00:00"},
+            {"price": 95.0, "detected_at": "2026-01-02T10:00:00"},
+            {"price": 90.0, "detected_at": "2026-01-03T10:00:00"},
+            {"price": 85.0, "detected_at": "2026-01-04T10:00:00"},
+        ]
+        result = generate_price_chart("Test Product", history)
+        assert result is not None
+        assert isinstance(result, bytes)
+        assert len(result) > 100
+        # PNG magic bytes
+        assert result[:4] == b"\x89PNG"
+
+    def test_insufficient_data(self):
+        from deals_scraper.charts import generate_price_chart
+        assert generate_price_chart("Test", []) is None
+        assert generate_price_chart("Test", [{"price": 100, "detected_at": "2026-01-01T00:00:00"}]) is None
+
+
+# ===========================================================================
+# 21. MODELS — proxy_url in StoreConfig
+# ===========================================================================
+
+class TestStoreConfigProxy:
+    """Tests para proxy_url en StoreConfig."""
+
+    def test_proxy_url_default_none(self):
+        sc = StoreConfig.from_dict({"name": "test", "scrape_urls": []})
+        assert sc.proxy_url is None
+
+    def test_proxy_url_from_dict(self):
+        sc = StoreConfig.from_dict({
+            "name": "test", "scrape_urls": [],
+            "proxy_url": "http://proxy:8080",
+        })
+        assert sc.proxy_url == "http://proxy:8080"
+
+
+# ===========================================================================
+# 22. TELEGRAM FORMATTING — BAJADA_PRECIO
+# ===========================================================================
+
+class TestTelegramPriceDropFormat:
+    """Tests para el formato de bajada de precio."""
+
+    def test_format_price_drop(self):
+        d = _make_deal(
+            title="Samsung Galaxy S25",
+            current_price=799.99,
+            original_price=999.99,
+            discount_pct=20.0,
+            store="amazon",
+            alert_tier="BAJADA_PRECIO",
+        )
+        result = TelegramBot._format_price_drop(d)
+        assert "BAJADA DE PRECIO" in result
+        assert "799.99" in result
+
+    def test_format_deal_routes_price_drop(self):
+        d = _make_deal(
+            current_price=100, store="s",
+            alert_tier="BAJADA_PRECIO",
+            original_price=150, discount_pct=33,
+        )
+        result = TelegramBot._format_deal(d)
+        assert "BAJADA DE PRECIO" in result
+
+
+# ===========================================================================
+# 23. WATCHLIST MERGE (DB + YAML)
+# ===========================================================================
+
+class TestWatchlistMerge:
+    """Tests para el merge de watchlist YAML + DB."""
+
+    def test_merge_db_items(self, tmp_db):
+        tmp_db.add_watchlist_item("RTX 5070", 500)
+        deals = [
+            _make_deal(title="RTX 5070 Gaming GPU", current_price=200,
+                       original_price=500, url="https://x.com/rtx5070"),
+        ]
+        watchlist_cfg = {"enabled": True, "products": []}
+        matched = check_watchlist(deals, watchlist_cfg, min_discount=30.0, db=tmp_db)
+        assert len(matched) == 1
+
+    def test_no_duplicate_yaml_db(self, tmp_db):
+        """Si el mismo producto está en YAML y DB, no duplicar."""
+        tmp_db.add_watchlist_item("RTX 5070", 500)
+        deals = [
+            _make_deal(title="RTX 5070 Gaming GPU", current_price=200,
+                       original_price=500, url="https://x.com/rtx5070"),
+        ]
+        watchlist_cfg = {
+            "enabled": True,
+            "products": [{"name": "RTX 5070", "max_price": 600}],
+        }
+        matched = check_watchlist(deals, watchlist_cfg, min_discount=30.0, db=tmp_db)
+        # Should match once, not twice
+        assert len(matched) == 1

@@ -23,6 +23,7 @@ from deals_scraper.filters import (
     check_watchlist,
     detect_absurdly_cheap,
     detect_cross_store_bargains,
+    detect_price_drops,
     verify_real_deals,
 )
 from deals_scraper.market_price import MarketPriceChecker
@@ -123,12 +124,25 @@ async def run_cycle(
     # --- Contador global de alertas (respetar max_per_cycle para TODAS) ---
     deals_sent = 0
 
+    # --- Bajadas de precio significativas ---
+    price_drop_deals = detect_price_drops(all_raw_deals, db=db)
+    for deal in price_drop_deals:
+        if deals_sent >= max_per_cycle:
+            logger.info("Límite de alertas alcanzado (%d), parando envíos", max_per_cycle)
+            break
+        if deal.id is not None and db.is_sent(deal.id):
+            continue
+        await telegram_bot.send_deal_immediate(deal)
+        if deal.id is not None:
+            db.mark_sent([deal.id])
+        deals_sent += 1
+
     # --- Watchlist: alertar productos vigilados a buen precio ---
     watchlist_cfg = cfg.get("watchlist", {})
     watchlist_deals: list = []
     if watchlist_cfg.get("enabled", False):
         min_discount = filters_cfg.get("min_discount", 45.0)
-        watchlist_deals = check_watchlist(all_raw_deals, watchlist_cfg, min_discount=min_discount)
+        watchlist_deals = check_watchlist(all_raw_deals, watchlist_cfg, min_discount=min_discount, db=db)
         for deal in watchlist_deals:
             if deals_sent >= max_per_cycle:
                 logger.info("Límite de alertas alcanzado (%d), parando envíos", max_per_cycle)
@@ -220,8 +234,22 @@ async def run_cycle(
             db.mark_sent([deal.id])
         deals_sent += 1
 
-    # --- Cross-store desactivado: comparar precios entre tiendas no es fiable
-    # porque una tienda con precio inflado no indica el valor real del producto ---
+    # --- Cross-store: comparar precios entre tiendas ---
+    cross_store_cfg = cfg.get("cross_store", {})
+    if cross_store_cfg.get("enabled", False):
+        pairs = detect_cross_store_bargains(db, hours=24)
+        _inflated_stores = {"amazon", "aliexpress", "ebay", "miravia", "lifeinformatica"}
+        for cheap, expensive in pairs:
+            if deals_sent >= max_per_cycle:
+                break
+            if expensive.store in _inflated_stores:
+                continue
+            if cheap.id is not None and db.is_sent(cheap.id):
+                continue
+            await telegram_bot.send_cross_store_deal(cheap, expensive)
+            if cheap.id is not None:
+                db.mark_sent([cheap.id])
+            deals_sent += 1
 
     # Persistir descuento real sin resetear sent_to_telegram de deals ya enviados
     for deal in normal_deals:
@@ -255,7 +283,10 @@ async def run_cycle(
 @click.option("--daemon", is_flag=True, help="Ejecutar en modo daemon con scheduler")
 @click.option("--config", "config_path", default=None, help="Ruta al config.yaml")
 @click.option("--verbose", "-v", is_flag=True, help="Logging detallado (DEBUG)")
-def main(once: bool, daemon: bool, config_path: str | None, verbose: bool) -> None:
+@click.option("--dashboard", is_flag=True, help="Arrancar dashboard web")
+@click.option("--dashboard-port", default=8080, help="Puerto del dashboard")
+def main(once: bool, daemon: bool, config_path: str | None, verbose: bool,
+         dashboard: bool, dashboard_port: int) -> None:
     """Deals Scraper — Busca ofertas y envía alertas a Telegram."""
     _setup_logging(verbose)
 
@@ -292,6 +323,14 @@ def main(once: bool, daemon: bool, config_path: str | None, verbose: bool) -> No
         db=db,
     )
 
+    if dashboard:
+        logger.info("Modo: dashboard web en puerto %d", dashboard_port)
+        from deals_scraper.dashboard import create_app
+        import uvicorn
+        app = create_app(db.db_path)
+        uvicorn.run(app, host="0.0.0.0", port=dashboard_port)
+        return
+
     if once:
         logger.info("Modo: ejecución única")
         asyncio.run(_run_once(cfg, db, http_client, browser_client, telegram_bot))
@@ -319,12 +358,18 @@ async def _run_single_store(
 
 async def _run_daemon(cfg, db, http_client, browser_client, telegram_bot) -> None:
     await telegram_bot.validate()
+
+    # Iniciar polling de Telegram para recibir comandos
+    app = telegram_bot.build_application()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    logger.info("Telegram polling iniciado — comandos activos")
+
     scheduler = Scheduler()
     store_configs = get_store_configs(cfg)
 
     for sc in store_configs:
-        # store_name se consume en add_store_job; pasamos el nombre como
-        # kwarg separado para que run_cycle filtre por tienda.
         scheduler.add_store_job(
             store_name=sc.name,
             func=_run_single_store,
@@ -345,6 +390,9 @@ async def _run_daemon(cfg, db, http_client, browser_client, telegram_bot) -> Non
     try:
         await scheduler.run_forever()
     finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
         await http_client.close()
         await browser_client.close()
         db.close()
