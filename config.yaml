@@ -583,8 +583,8 @@ filters:
 # Modo velocidad: "fast" (1-2.5s/URL, paralelo) o "stealth" (8-24s/URL, secuencial)
 speed:
   mode: fast
-  max_concurrent_stores: 4
-  max_concurrent_urls_per_store: 3
+  max_concurrent_stores: 5
+  max_concurrent_urls_per_store: 4
   price_error_threshold: 65   # % descuento para considerar error de precio (alto = más estricto)
 
 anti_ban:
