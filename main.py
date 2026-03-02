@@ -105,11 +105,13 @@ async def run_cycle(
                 logger.exception("Error scrapeando %s", sc.name)
                 stores_failed += 1
                 return []
-            finally:
-                # Liberar contextos del browser después de cada tienda
-                await browser_client.cleanup_contexts()
 
     results = await asyncio.gather(*[_scrape_store(sc) for sc in store_configs])
+
+    # Liberar contextos del browser solo en ciclos completos (no por tienda individual)
+    # En ciclos individuales del scheduler, no limpiar — otra tienda puede estar usándolos
+    if not store_name:
+        await browser_client.cleanup_contexts()
 
     # --- DB upserts secuenciales (SQLite single-writer) ---
     all_raw_deals: list = []

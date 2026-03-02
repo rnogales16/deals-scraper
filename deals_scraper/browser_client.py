@@ -460,6 +460,7 @@ class BrowserClient:
 
         self._playwright = None
         self._browser = None
+        self._start_lock = asyncio.Lock()
         self._request_log: dict[str, list[float]] = defaultdict(list)
         # Cookie persistence: domain -> list[cookie dicts]
         self._cookie_store: dict[str, list[dict]] = {}
@@ -470,10 +471,13 @@ class BrowserClient:
     # Lifecycle
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        """Inicia Playwright y lanza el navegador Chromium."""
-        from playwright.async_api import async_playwright
+        """Inicia Playwright y lanza el navegador Chromium (una sola vez)."""
+        async with self._start_lock:
+            if self._browser:
+                return  # Ya iniciado
+            from playwright.async_api import async_playwright
 
-        self._playwright = await async_playwright().start()
+            self._playwright = await async_playwright().start()
 
         launch_opts: dict = {
             "headless": self.headless,
@@ -489,14 +493,6 @@ class BrowserClient:
                 "--disable-gpu",
                 "--lang=es-ES",
                 "--disable-features=IsolateOrigins,site-per-process",
-                # Memory optimization
-                "--js-flags=--max-old-space-size=512",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-                "--single-process",
             ],
         }
         if self.proxy_url:
@@ -741,23 +737,10 @@ class BrowserClient:
         finally:
             await page.close()
 
-    _MAX_CONTEXTS = 6  # Máximo de contextos simultáneos para limitar RAM
-
     async def _get_or_create_context(self, domain: str):
         """Return a persistent BrowserContext for the domain, creating if needed."""
         if domain in self._contexts:
             return self._contexts[domain]
-
-        # Evitar acumulación de contextos: cerrar los más antiguos
-        while len(self._contexts) >= self._MAX_CONTEXTS:
-            oldest_domain = next(iter(self._contexts))
-            old_ctx = self._contexts.pop(oldest_domain)
-            try:
-                await old_ctx.close()
-                logger.debug("Contexto cerrado (límite %d): %s",
-                             self._MAX_CONTEXTS, oldest_domain)
-            except Exception:
-                pass
 
         ua = random.choice(_USER_AGENTS)
         viewport = random.choice(_VIEWPORTS)
