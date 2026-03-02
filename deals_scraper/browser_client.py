@@ -490,7 +490,7 @@ class BrowserClient:
                 "--lang=es-ES",
                 "--disable-features=IsolateOrigins,site-per-process",
                 # Memory optimization
-                "--js-flags=--max-old-space-size=256",
+                "--js-flags=--max-old-space-size=512",
                 "--disable-extensions",
                 "--disable-background-networking",
                 "--disable-background-timer-throttling",
@@ -741,7 +741,7 @@ class BrowserClient:
         finally:
             await page.close()
 
-    _MAX_CONTEXTS = 3  # Máximo de contextos simultáneos para limitar RAM
+    _MAX_CONTEXTS = 6  # Máximo de contextos simultáneos para limitar RAM
 
     async def _get_or_create_context(self, domain: str):
         """Return a persistent BrowserContext for the domain, creating if needed."""
