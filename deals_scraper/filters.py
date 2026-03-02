@@ -193,6 +193,8 @@ _GLOBAL_ACCESSORY_KEYWORDS = (
     "correa para ", "correa de repuesto",
     "almohadilla", "ear tip", "recambio", "repuesto",
     "pegatina", "skin ", "film protector",
+    "adaptador ", "cargador ", "fuente de alimentacion",
+    "power adapter", "charger ", "charging ",
 )
 
 
@@ -390,6 +392,10 @@ def detect_absurdly_cheap(
         if deal.current_price <= 0:
             continue
 
+        # Filtro anti-accesorio: adaptadores, cargadores, fundas, cables...
+        if _is_accessory_title(deal.title):
+            continue
+
         # Solo productos nuevos o con poco historial
         stats = db.get_price_stats_by_url(deal.url)
         if stats is not None and stats["observations"] >= min_observations:
@@ -398,6 +404,7 @@ def detect_absurdly_cheap(
         flagged = False
         ref_label = ""
         ref_p5 = 0.0
+        threshold = 0.0
 
         # Tier 0: marca reconocida a precio absurdo (< 50€ para producto premium)
         # Un MacBook a 10€, unas AirPods a 3€, una RTX a 5€ — siempre alertar
@@ -405,6 +412,7 @@ def detect_absurdly_cheap(
             flagged = True
             ref_label = f"{deal.store}/marca_premium"
             ref_p5 = 200.0  # Estimación conservadora
+            threshold = 50.0
 
         # Tier 1: store + category — precio < 10% del P5
         if not flagged and deal.category:
@@ -434,15 +442,32 @@ def detect_absurdly_cheap(
 
         if flagged:
             synthetic_discount = round((1 - deal.current_price / ref_p5) * 100, 1)
+            savings = ref_p5 - deal.current_price
+
+            # Aplicar mismos umbrales que el resto del pipeline:
+            # 50% para ≥100€, 60% para <100€, mínimo 50€ de ahorro
+            effective_threshold = 50.0
+            if ref_p5 < 100:
+                effective_threshold = 60.0
+
+            if synthetic_discount < effective_threshold or savings < 50:
+                logger.debug(
+                    "ABSURDO DESCARTADO: %s — %.2f€ (descuento: %.0f%%, "
+                    "ahorro: %.0f€, umbral: %.0f%%)",
+                    deal.title[:50], deal.current_price,
+                    synthetic_discount, savings, effective_threshold,
+                )
+                continue
+
             deal.discount_pct = synthetic_discount
             deal.original_price = ref_p5
             deal.alert_tier = "ERROR_DE_PRECIO"
 
             logger.warning(
                 "ABSURDAMENTE BARATO: %s — %.2f€ (P5 de %s: %.2f€, "
-                "umbral: %.2f€, descuento sintético: %.0f%%)",
+                "umbral: %.2f€, descuento sintético: %.0f%%, ahorro: %.0f€)",
                 deal.title[:50], deal.current_price, ref_label,
-                ref_p5, threshold, synthetic_discount,
+                ref_p5, threshold, synthetic_discount, savings,
             )
             detected.append(deal)
 
@@ -680,13 +705,26 @@ def check_watchlist(
             )
             refurbished = _is_refurbished(deal)
 
-            # --- Vía 1: La tienda muestra descuento significativo (≥30%) ---
-            if store_discount >= 30 and not refurbished:
-                if store_discount < min_discount:
+            # Umbral tiered: 50% para ≥100€, 60% para <100€
+            effective_threshold = 50.0
+            if deal.current_price < 100:
+                effective_threshold = 60.0
+            min_savings_wl = 50.0
+
+            # --- Vía 1: La tienda muestra descuento significativo ---
+            if store_discount >= effective_threshold and not refurbished:
+                store_savings = (deal.original_price - deal.current_price
+                                 if deal.original_price else 0)
+                if store_savings < min_savings_wl:
+                    logger.debug(
+                        "WATCHLIST SKIP %s (vía 1): %s — ahorro %.0f€ < %.0f€",
+                        product["name"], deal.title[:50],
+                        store_savings, min_savings_wl,
+                    )
                     continue
                 if deal.current_price < max_price * 0.25:
                     deal.alert_tier = "ERROR_DE_PRECIO"
-                elif store_discount >= 60:
+                elif store_discount >= 65:
                     deal.alert_tier = "ERROR_DE_PRECIO"
                 else:
                     deal.alert_tier = "CHOLLO"
@@ -695,13 +733,19 @@ def check_watchlist(
 
             # --- Vía 2: Precio absurdamente bajo (error de precio) ---
             elif deal.current_price < max_price * 0.25 and not refurbished:
+                wl_savings = max_price - deal.current_price
+                if wl_savings < min_savings_wl:
+                    continue
                 deal.alert_tier = "ERROR_DE_PRECIO"
                 deal.discount_pct = watchlist_discount
                 deal.original_price = deal.original_price or max_price
 
             # --- Vía 3: Tienda de reacondicionados ---
             elif refurbished:
-                if watchlist_discount < min_discount:
+                if watchlist_discount < effective_threshold:
+                    continue
+                wl_savings = max_price - deal.current_price
+                if wl_savings < min_savings_wl:
                     continue
                 deal.alert_tier = "CHOLLO"
                 deal.discount_pct = watchlist_discount
@@ -711,9 +755,10 @@ def check_watchlist(
             else:
                 logger.debug(
                     "WATCHLIST SKIP %s: %s — %.2f€ (store_disc=%.0f%%, "
-                    "wl_disc=%.0f%%, no vía aplica)",
+                    "wl_disc=%.0f%%, umbral=%.0f%%, no vía aplica)",
                     product["name"], deal.title[:50],
                     deal.current_price, store_discount, watchlist_discount,
+                    effective_threshold,
                 )
                 continue
 
