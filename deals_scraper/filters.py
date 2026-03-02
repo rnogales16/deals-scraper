@@ -94,11 +94,11 @@ def classify_deal(real_discount: float, price_error_threshold: float = 50.0) -> 
 
     Returns:
         "ERROR_DE_PRECIO" si ≥ price_error_threshold,
-        "CHOLLO" si ≥ 30%, "NORMAL" en otro caso.
+        "CHOLLO" si ≥ 50%, "NORMAL" en otro caso.
     """
     if real_discount >= price_error_threshold:
         return "ERROR_DE_PRECIO"
-    if real_discount >= 30.0:
+    if real_discount >= 50.0:
         return "CHOLLO"
     return "NORMAL"
 
@@ -314,18 +314,27 @@ def verify_real_deals(
             )
             continue
 
-        if real_discount < real_discount_min:
+        # Productos baratos necesitan descuento más agresivo para ser rentables
+        effective_min = real_discount_min  # 50% para ≥100€
+        if median_price < 100:
+            effective_min = max(real_discount_min, 60.0)  # 60% para <100€
+
+        # Ahorro absoluto mínimo: no alertar por 5€ de ahorro
+        savings = median_price - deal.current_price
+        min_savings = 50.0
+
+        if real_discount < effective_min or savings < min_savings:
             fake_count += 1
             logger.debug(
-                "FAKE: %s — %.2f€ (mediana: %.2f€, descuento real: %.1f%%, mín. histórico: %.2f€)",
-                deal.title[:50], deal.current_price, median_price, real_discount, min_price,
+                "DESCARTADO: %s — %.2f€ (mediana: %.2f€, descuento real: %.1f%%, ahorro: %.0f€, umbral: %.0f%%)",
+                deal.title[:50], deal.current_price, median_price, real_discount, savings, effective_min,
             )
             continue
 
         # El precio actual es significativamente menor que la mediana — oferta real
         logger.info(
-            "REAL: %s — %.2f€ (mediana: %.2f€, descuento real: -%.1f%%, mín. histórico: %.2f€)",
-            deal.title[:50], deal.current_price, median_price, real_discount, min_price,
+            "REAL: %s — %.2f€ (mediana: %.2f€, descuento real: -%.1f%%, ahorro: %.0f€)",
+            deal.title[:50], deal.current_price, median_price, real_discount, savings,
         )
 
         # Reemplazar el descuento de la tienda por el descuento real
@@ -828,16 +837,23 @@ def detect_cross_store_bargains(
 def detect_price_drops(
     deals: list[Deal],
     db: Database,
-    drop_threshold: float = 20.0,
+    drop_threshold: float = 50.0,
     min_observations: int = 3,
+    min_savings: float = 50.0,
 ) -> list[Deal]:
-    """Detecta deals con bajada significativa respecto a su mediana histórica.
+    """Detecta deals con bajada brutal respecto a su mediana histórica.
+
+    Solo alerta si el descuento es realmente rentable para reventa:
+    - Bajada ≥ drop_threshold% vs mediana
+    - Ahorro absoluto ≥ min_savings€
+    - Productos baratos (<100€) necesitan ≥60% de bajada
 
     Args:
         deals: Deals a analizar.
         db: Base de datos con historial.
         drop_threshold: % mínimo de bajada vs mediana para alertar.
         min_observations: Mínimo de observaciones de precio necesarias.
+        min_savings: Ahorro mínimo en euros para alertar.
 
     Returns:
         Lista de deals con bajada significativa, con alert_tier="BAJADA_PRECIO".
@@ -859,15 +875,26 @@ def detect_price_drops(
             continue
 
         drop_pct = round((1 - current / median) * 100, 1)
-        if drop_pct >= drop_threshold:
-            deal.alert_tier = "BAJADA_PRECIO"
-            deal.original_price = median
-            deal.discount_pct = drop_pct
-            drops.append(deal)
-            logger.info(
-                "BAJADA PRECIO: %s — %.2f€ (mediana: %.2f€, bajada: -%.1f%%)",
-                deal.title[:50], current, median, drop_pct,
-            )
+        savings = median - current
+
+        # Productos baratos necesitan bajada más agresiva
+        effective_threshold = drop_threshold  # 50% para ≥100€
+        if median < 100:
+            effective_threshold = max(drop_threshold, 60.0)  # 60% para <100€
+
+        if drop_pct < effective_threshold:
+            continue
+        if savings < min_savings:
+            continue
+
+        deal.alert_tier = "BAJADA_PRECIO"
+        deal.original_price = median
+        deal.discount_pct = drop_pct
+        drops.append(deal)
+        logger.info(
+            "BAJADA PRECIO: %s — %.2f€ (mediana: %.2f€, bajada: -%.1f%%, ahorro: %.0f€)",
+            deal.title[:50], current, median, drop_pct, savings,
+        )
 
     if drops:
         logger.info("Bajadas de precio: %d productos con bajada significativa", len(drops))

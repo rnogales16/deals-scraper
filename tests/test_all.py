@@ -203,17 +203,21 @@ class TestClassifyDeal:
     def test_normal(self):
         assert classify_deal(15.0) == "NORMAL"
 
+    def test_normal_below_50(self):
+        assert classify_deal(35.0) == "NORMAL"
+
     def test_chollo(self):
-        assert classify_deal(35.0) == "CHOLLO"
+        assert classify_deal(52.0, price_error_threshold=65.0) == "CHOLLO"
 
     def test_error_de_precio(self):
         assert classify_deal(55.0) == "ERROR_DE_PRECIO"
 
-    def test_boundary_30(self):
-        assert classify_deal(30.0) == "CHOLLO"
-
-    def test_boundary_50(self):
+    def test_boundary_50_is_error_at_default_threshold(self):
+        # Default price_error_threshold=50, so 50% = ERROR
         assert classify_deal(50.0) == "ERROR_DE_PRECIO"
+
+    def test_boundary_65_error(self):
+        assert classify_deal(65.0) == "ERROR_DE_PRECIO"
 
     def test_custom_threshold(self):
         assert classify_deal(45.0, price_error_threshold=40.0) == "ERROR_DE_PRECIO"
@@ -1266,24 +1270,25 @@ class TestVerifyRealDeals:
         assert len(verified) == 0
 
     def test_real_discount_passes(self, tmp_db):
-        """Producto con historial y bajada real pasa la verificación."""
-        # Registrar historial de precios altos primero
-        d_initial = _make_deal(url="https://x.com/p1", current_price=200)
+        """Producto con historial y bajada real (>50%, >50€ ahorro) pasa la verificación."""
+        # Registrar historial de precios altos (mediana ~500€)
+        d_initial = _make_deal(url="https://x.com/p1", current_price=500)
         tmp_db.upsert_deal(d_initial)
         deal_id = tmp_db.conn.execute("SELECT id FROM deals WHERE url=?", (d_initial.url,)).fetchone()["id"]
-        for price in [200, 190, 195]:
+        for price in [500, 490, 510]:
             tmp_db.conn.execute(
                 "INSERT INTO price_history (deal_id, price, detected_at) VALUES (?, ?, ?)",
                 (deal_id, price, datetime.utcnow().isoformat()),
             )
         tmp_db.conn.commit()
 
-        # Ahora el precio baja a 100 — upsert para que quede en historial
-        d_cheap = _make_deal(url="https://x.com/p1", current_price=100)
+        # Ahora el precio baja a 200 (~60% descuento, 300€ ahorro)
+        d_cheap = _make_deal(url="https://x.com/p1", current_price=200)
         tmp_db.upsert_deal(d_cheap)
 
-        d_check = _make_deal(url="https://x.com/p1", current_price=100, discount_pct=20)
-        verified = verify_real_deals([d_check], db=tmp_db, min_observations=2)
+        d_check = _make_deal(url="https://x.com/p1", current_price=200, discount_pct=20)
+        verified = verify_real_deals([d_check], db=tmp_db, min_observations=2,
+                                      real_discount_min=50.0)
         assert len(verified) == 1
         assert verified[0].alert_tier in ("CHOLLO", "ERROR_DE_PRECIO")
 
@@ -2271,20 +2276,20 @@ class TestDetectPriceDrops:
 
     def test_price_drop_detected(self, tmp_db):
         from deals_scraper.filters import detect_price_drops
-        # Create deal with history of high prices
-        d = _make_deal(url="https://x.com/drop1", current_price=200)
+        # Create deal with history of high prices (mediana ~500€)
+        d = _make_deal(url="https://x.com/drop1", current_price=500)
         deal_id, _ = tmp_db.upsert_deal(d)
-        for price in [200, 195, 210, 200]:
+        for price in [500, 490, 510, 500]:
             tmp_db.conn.execute(
                 "INSERT INTO price_history (deal_id, price, detected_at) VALUES (?, ?, ?)",
                 (deal_id, price, datetime.utcnow().isoformat()),
             )
-        # Now price drops to 150
-        tmp_db.upsert_deal(_make_deal(url="https://x.com/drop1", current_price=150))
+        # Now price drops to 200 (60% drop, 300€ savings)
+        tmp_db.upsert_deal(_make_deal(url="https://x.com/drop1", current_price=200))
         tmp_db.conn.commit()
 
-        deal = _make_deal(url="https://x.com/drop1", current_price=150, id=deal_id)
-        drops = detect_price_drops([deal], db=tmp_db, drop_threshold=20.0, min_observations=3)
+        deal = _make_deal(url="https://x.com/drop1", current_price=200, id=deal_id)
+        drops = detect_price_drops([deal], db=tmp_db, drop_threshold=50.0, min_observations=3, min_savings=50.0)
         assert len(drops) == 1
         assert drops[0].alert_tier == "BAJADA_PRECIO"
 
