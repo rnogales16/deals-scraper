@@ -197,11 +197,93 @@ _GLOBAL_ACCESSORY_KEYWORDS = (
     "power adapter", "charger ", "charging ",
 )
 
+# Keywords que indican que el producto es un componente/accesorio de otro
+# producto más caro (ej: water block para RTX 5090 ≠ RTX 5090 GPU).
+# Estos productos NO deben recibir bypass de ERROR_DE_PRECIO porque su
+# precio real es mucho menor que el producto principal que mencionan.
+_COMPONENT_KEYWORDS = (
+    "refrigeracion por agua", "refrigeración por agua",
+    "water block", "waterblock", "water cooling",
+    "bloque de agua", "bloque refrigeracion",
+    "backplate", "back plate",
+    "soporte para ", "soporte de ",
+    "bracket", "mounting kit", "kit de montaje",
+    "riser", "vertical gpu",
+    "disipador para ", "heatsink",
+)
+
+# Tarjetas regalo / códigos digitales — su precio ES el valor facial,
+# no tiene sentido compararlos con el producto que mencionan.
+_GIFT_CARD_KEYWORDS = (
+    "tarjeta de regalo", "tarjeta regalo", "gift card",
+    "codigo digital", "código digital", "descarga digital",
+    "digital code", "digital download",
+    "tarjeta prepago", "tarjeta monedero",
+    "saldo ", "credito ", "crédito ",
+    "suscripcion ", "suscripción ",
+    "pase de ", "pass ",
+)
+
 
 def _is_accessory_title(title: str) -> bool:
     """Detecta si un título es claramente un accesorio (funda, cable, etc.)."""
     t = title.lower()
     return any(kw in t for kw in _GLOBAL_ACCESSORY_KEYWORDS)
+
+
+# Plataformas de consola — para detectar JUEGOS que mencionan la consola.
+_CONSOLE_PLATFORM_RE = re.compile(
+    r'\b(nintendo switch 2|nintendo switch oled|nintendo switch|'
+    r'playstation 5|playstation 4|ps5|ps4|'
+    r'xbox series x|xbox series s|xbox one)\b',
+    re.IGNORECASE,
+)
+# Palabras que, justo ANTES del nombre de la plataforma, indican que el
+# producto SÍ es la consola (no un juego). El resto de prefijos (un nombre
+# de juego) implican que es un videojuego para esa plataforma.
+_CONSOLE_QUALIFIERS = {
+    "consola", "videoconsola", "nueva", "nuevo", "pack",
+    # Marcas: una consola puede ir precedida por su marca ("Sony PlayStation 5
+    # Pro"), pero un juego nunca ("God of War PlayStation 5", no "...Sony...").
+    "sony", "microsoft", "nintendo", "sega", "valve",
+}
+
+
+def _is_console_game(title: str) -> bool:
+    """Detecta si el título es un JUEGO para consola, no la consola en sí.
+
+    Los juegos (p.ej. de El Corte Inglés) se titulan "<Nombre Juego> <Plataforma>",
+    como "High on Life Nintendo Switch 2" o "Star Fox Nintendo Switch 2". El nombre
+    de la plataforma va precedido por el título del juego, no por un cualificador
+    ("Consola Nintendo Switch 2"). La consola real empieza por la plataforma o por
+    un cualificador, así que solo marcamos cuando hay un prefijo que no lo es.
+    """
+    m = _CONSOLE_PLATFORM_RE.search(title)
+    if not m:
+        return False
+    prefix = title[:m.start()].strip()
+    if not prefix:
+        return False  # empieza por la plataforma → es la consola/bundle
+    last_word = prefix.lower().split()[-1]
+    return last_word not in _CONSOLE_QUALIFIERS
+
+
+def _is_misleading_product(title: str) -> bool:
+    """Detecta productos cuyo título menciona un producto caro pero que NO lo son.
+
+    Ejemplos:
+    - "Alphacool Core RTX 5090, Refrigeración por agua" → water block, NO una GPU
+    - "Tarjeta de Regalo PlayStation 50€" → gift card, NO una consola
+    - "High on Life Nintendo Switch 2" → juego, NO la consola
+
+    Estos productos generan falsos positivos de ERROR_DE_PRECIO porque su precio
+    real (~200€ water block, ~50€ gift card/juego) se compara contra el producto
+    principal (~1800€ GPU, ~400€ consola).
+    """
+    t = title.lower()
+    return (any(kw in t for kw in _COMPONENT_KEYWORDS)
+            or any(kw in t for kw in _GIFT_CARD_KEYWORDS)
+            or _is_console_game(title))
 
 
 def _is_refurbished(deal: Deal) -> bool:
@@ -261,15 +343,31 @@ def verify_real_deals(
             # 4. Ahorro absoluto ≥ 50€ (evitar basura barata)
             # 5. Precio mínimo ≥ 30€ (evitar accesorios)
             # 6. Tiene market_price que confirme el descuento
+            # Calidad del producto: queremos cazar glitches extremos (aspirador
+            # a 0.66€, TV a 0.01€) de productos REALES, no chatarra con precio
+            # "anterior" inflado. La señal de "producto de verdad" es: marca
+            # reconocida O tienda de retail fiable (no marketplace ni
+            # reacondicionado — esos ya se excluyen abajo).
+            trusted_retail = (deal.store not in _INFLATED_PRICE_STORES
+                              and deal.store not in _REFURBISHED_STORES)
+            quality_product = _has_known_brand(deal.title.lower()) or trusted_retail
+
+            # Suelo de precio y tope de ratio: estrictos para productos dudosos
+            # (anti-basura), pero relajados para productos de calidad — un glitch
+            # real tiene precio ínfimo y ratio altísimo, que es justo lo deseable.
+            min_price_floor = 0.0 if quality_product else 30.0
+            max_ratio = float("inf") if quality_product else 10.0
+
             if (not _is_refurbished(deal)
+                    and not _is_misleading_product(deal.title)
                     and deal.store not in _INFLATED_PRICE_STORES
                     and deal.original_price and deal.original_price > deal.current_price
-                    and deal.current_price >= 30):
+                    and deal.current_price >= min_price_floor):
                 calculated_discount = (1 - deal.current_price / deal.original_price) * 100
                 price_ratio = deal.original_price / deal.current_price
                 absolute_savings = deal.original_price - deal.current_price
                 if (calculated_discount >= price_error_threshold
-                        and price_ratio < 10
+                        and price_ratio < max_ratio
                         and absolute_savings >= 50):
                     # Si tiene market_price, verificar contra él
                     if deal.market_price:
@@ -342,7 +440,18 @@ def verify_real_deals(
         # Reemplazar el descuento de la tienda por el descuento real
         deal.discount_pct = real_discount
         deal.original_price = median_price
-        deal.alert_tier = classify_deal(real_discount, price_error_threshold)
+        tier = classify_deal(real_discount, price_error_threshold)
+
+        # Bloquear ERROR_DE_PRECIO para productos engañosos (water blocks,
+        # gift cards, etc.) — su historial puede estar contaminado.
+        if tier == "ERROR_DE_PRECIO" and _is_misleading_product(deal.title):
+            logger.info(
+                "BLOQUEADO (producto engañoso): %s — tier %s rebajado a CHOLLO",
+                deal.title[:50], tier,
+            )
+            tier = "CHOLLO"
+
+        deal.alert_tier = tier
         verified.append(deal)
 
     logger.info(
@@ -677,6 +786,12 @@ def check_watchlist(
 
     for deal in deals:
         if deal.url in seen_urls:
+            continue
+        # Filtro anti-accesorio/engañoso: la watchlist matchea por substring,
+        # así que un water block ("RTX 5090 Refrigeración por agua") o un juego
+        # ("High on Life Nintendo Switch 2") matchearía el nombre del producto.
+        # Aplicar los mismos filtros que el resto del pipeline.
+        if _is_accessory_title(deal.title) or _is_misleading_product(deal.title):
             continue
         title_lower = deal.title.lower()
         for product in products:
