@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import random
+import signal
 import time
 from collections import defaultdict
 from typing import Any
@@ -439,6 +441,29 @@ def _build_stealth_script(ua: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Detección de "driver/navegador muerto" — errores que NO son fallo de la web,
+# sino que el subproceso de Playwright/Chromium se ha caído (p.ej. al suspender
+# el equipo). Cuando aparecen hay que relanzar el navegador, no reintentar la
+# misma URL contra un driver muerto.
+# ---------------------------------------------------------------------------
+_BROWSER_DEAD_MARKERS = (
+    "connection closed while reading from the driver",
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browser closed",
+    "the connection was closed",
+    "playwright was just garbage collected",
+    "navigation failed because browser has disconnected",
+)
+
+
+def _is_browser_dead_error(exc: BaseException) -> bool:
+    """True si la excepción indica que el driver/navegador murió (no la web)."""
+    msg = str(exc).lower()
+    return any(m in msg for m in _BROWSER_DEAD_MARKERS)
+
+
 class BrowserClient:
     """Cliente Playwright async con medidas anti-deteccion avanzadas."""
 
@@ -450,6 +475,7 @@ class BrowserClient:
         proxy_url: str | None = None,
         headless: bool = True,
         speed_mode: bool = False,
+        channel: str | None = None,
     ) -> None:
         self.delay_min = delay_min
         self.delay_max = delay_max
@@ -457,10 +483,11 @@ class BrowserClient:
         self.proxy_url = proxy_url
         self.headless = headless
         self.speed_mode = speed_mode
+        self.channel = channel
 
         self._playwright = None
         self._browser = None
-        self._start_lock = asyncio.Lock()
+        self._start_lock: asyncio.Lock | None = None
         self._request_log: dict[str, list[float]] = defaultdict(list)
         # Cookie persistence: domain -> list[cookie dicts]
         self._cookie_store: dict[str, list[dict]] = {}
@@ -471,12 +498,36 @@ class BrowserClient:
     # Lifecycle
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        """Inicia Playwright y lanza el navegador Chromium (una sola vez)."""
-        async with self._start_lock:
-            if self._browser:
-                return  # Ya iniciado
-            from playwright.async_api import async_playwright
+        """Inicia Playwright y lanza el navegador Chromium (idempotente)."""
+        await self._ensure_started()
 
+    async def _ensure_started(self) -> None:
+        """Garantiza que el navegador está vivo; lo relanza si el driver murió.
+
+        El chequeo clave es ``is_connected()``: tras suspender el equipo el
+        objeto ``self._browser`` sigue existiendo pero el driver está muerto.
+        Seguro ante llamadas concurrentes (N tiendas en paralelo) gracias al
+        lock: solo una relanza, el resto re-comprueba y sale.
+        """
+        if self._browser is not None and self._browser.is_connected():
+            return
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            # Re-comprobar bajo el lock: otra corrutina pudo relanzarlo ya.
+            if self._browser is not None and self._browser.is_connected():
+                return
+            # Si había un navegador (muerto) o Playwright colgado, limpiarlo antes.
+            if self._browser is not None or self._playwright is not None:
+                logger.warning("Navegador caído/desconectado — reiniciando Playwright...")
+                await self._teardown_locked()
+            await self._launch_locked()
+
+    async def _launch_locked(self) -> None:
+        """Arranca Playwright (si hace falta) y lanza Chromium. Lock en mano."""
+        from playwright.async_api import async_playwright
+
+        if self._playwright is None:
             self._playwright = await async_playwright().start()
 
         launch_opts: dict = {
@@ -497,9 +548,62 @@ class BrowserClient:
         }
         if self.proxy_url:
             launch_opts["proxy"] = {"server": self.proxy_url}
+        if self.channel:
+            launch_opts["channel"] = self.channel
 
         self._browser = await self._playwright.chromium.launch(**launch_opts)
-        logger.info("Navegador Chromium iniciado (headless=%s)", self.headless)
+        # Guardar PID del proceso browser para poder matarlo si el cierre falla
+        try:
+            self._browser_pid = self._browser.process.pid
+        except Exception:
+            self._browser_pid = None
+        logger.info("Navegador Chromium iniciado (headless=%s, channel=%s, pid=%s)", self.headless, self.channel or "default", self._browser_pid)
+
+    async def _teardown_locked(self) -> None:
+        """Cierra contextos, navegador y Playwright (best-effort). Lock en mano.
+
+        Los contextos persistentes pertenecen al navegador muerto, así que hay
+        que descartarlos para que se recreen frescos tras el relanzamiento.
+        """
+        for ctx in list(self._contexts.values()):
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        self._contexts.clear()
+        try:
+            if self._browser is not None:
+                await self._browser.close()
+        except Exception:
+            pass
+        self._kill_browser_process()
+        self._browser_pid = None
+        try:
+            if self._playwright is not None:
+                await self._playwright.stop()
+        except Exception:
+            pass
+        self._browser = None
+        self._playwright = None
+
+    async def _with_recovery(self, op, url: str):
+        """Ejecuta una operación de fetch con auto-recuperación del navegador.
+
+        Garantiza el navegador vivo antes de empezar y, si el driver muere a
+        mitad de la operación, lo relanza y reintenta UNA vez. Si vuelve a
+        fallar, propaga (la tienda registra el error y sigue, sin bucle infinito).
+        """
+        await self._ensure_started()
+        try:
+            return await op()
+        except Exception as exc:
+            if not _is_browser_dead_error(exc):
+                raise
+            logger.warning(
+                "Driver del navegador caído durante %s — relanzando y reintentando", url
+            )
+            await self._ensure_started()
+            return await op()
 
     async def cleanup_contexts(self) -> None:
         """Cierra todos los contextos persistentes para liberar memoria.
@@ -518,12 +622,39 @@ class BrowserClient:
             logger.debug("Contextos cerrados: %d (memoria liberada)", closed)
 
     async def close(self) -> None:
-        """Cierra contextos persistentes, el navegador y Playwright."""
+        """Cierra contextos persistentes, el navegador y Playwright.
+
+        Si el cierre graceful falla, mata el proceso del browser directamente
+        para evitar dejar procesos Chrome huérfanos.
+        """
         await self.cleanup_contexts()
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
+        try:
+            if self._browser:
+                await self._browser.close()
+        except Exception:
+            logger.warning("Cierre graceful del browser falló, matando proceso")
+        finally:
+            self._kill_browser_process()
+        try:
+            if self._playwright:
+                await self._playwright.stop()
+        except Exception:
+            pass
+        self._browser = None
+        self._playwright = None
+
+    def _kill_browser_process(self) -> None:
+        """Mata el proceso del browser y todos sus hijos (Chrome helpers)."""
+        pid = getattr(self, "_browser_pid", None)
+        if not pid:
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.debug("Browser process %d terminado", pid)
+        except ProcessLookupError:
+            pass  # Ya terminó
+        except Exception as exc:
+            logger.debug("No se pudo matar browser pid %d: %s", pid, exc)
 
     # ------------------------------------------------------------------
     # Rate limiting y delays gaussianos
@@ -677,19 +808,25 @@ class BrowserClient:
     # ------------------------------------------------------------------
     # Fetch dispatcher
     # ------------------------------------------------------------------
-    async def fetch(self, url: str, force_stealth: bool = False) -> str:
-        """Navega a la URL y devuelve HTML. Despacha según speed_mode."""
-        if self.speed_mode and not force_stealth:
-            return await self._fetch_fast(url)
-        return await self._fetch_stealth(url)
+    async def fetch(self, url: str, force_stealth: bool = False, wait_for_selector: str | None = None) -> str:
+        """Navega a la URL y devuelve HTML. Despacha según speed_mode.
+
+        Envuelto en auto-recuperación: si el navegador se ha caído, se relanza
+        y se reintenta automáticamente.
+        """
+        async def _op() -> str:
+            if self.speed_mode and not force_stealth:
+                return await self._fetch_fast(url, wait_for_selector=wait_for_selector)
+            return await self._fetch_stealth(url, wait_for_selector=wait_for_selector)
+
+        return await self._with_recovery(_op, url)
 
     # ------------------------------------------------------------------
     # Fast fetch: persistent context, minimal delays, no scroll/mouse
     # ------------------------------------------------------------------
-    async def _fetch_fast(self, url: str) -> str:
+    async def _fetch_fast(self, url: str, wait_for_selector: str | None = None) -> str:
         """Fetch rápido: contexto persistente, sin scroll/mouse/cookies consent."""
-        if not self._browser:
-            await self.start()
+        await self._ensure_started()
 
         domain = urlparse(url).netloc
 
@@ -717,6 +854,13 @@ class BrowserClient:
 
             # Wait for Cloudflare Turnstile challenge to resolve
             await self._wait_for_cloudflare(page)
+
+            # Wait for specific selector if configured (AJAX-loaded content)
+            if wait_for_selector:
+                try:
+                    await page.wait_for_selector(wait_for_selector, timeout=10000)
+                except Exception:
+                    logger.warning("Selector '%s' no apareció en %s", wait_for_selector, url)
 
             # Single fast scroll to trigger lazy-loaded content
             try:
@@ -806,10 +950,9 @@ class BrowserClient:
     # ------------------------------------------------------------------
     # Stealth fetch: full anti-detection (original behaviour)
     # ------------------------------------------------------------------
-    async def _fetch_stealth(self, url: str) -> str:
+    async def _fetch_stealth(self, url: str, wait_for_selector: str | None = None) -> str:
         """Navega a la URL con Playwright — modo stealth completo."""
-        if not self._browser:
-            await self.start()
+        await self._ensure_started()
 
         domain = urlparse(url).netloc
         await self._random_delay()
@@ -889,6 +1032,13 @@ class BrowserClient:
             final_wait = int(_gaussian_delay(center=1.0, stddev=0.4, lo=0.4, hi=2.5) * 1000)
             await page.wait_for_timeout(final_wait)
 
+            # Wait for specific selector if configured (AJAX-loaded content)
+            if wait_for_selector:
+                try:
+                    await page.wait_for_selector(wait_for_selector, timeout=10000)
+                except Exception:
+                    logger.warning("Selector '%s' no apareció en %s", wait_for_selector, url)
+
             html = await page.content()
 
             # Persist cookies for future requests to this domain
@@ -913,58 +1063,61 @@ class BrowserClient:
 
         Returns ``(html, [response_json, ...])``.  Useful for SPA sites that
         load product data via XHR (e.g. Algolia).
+
+        Envuelto en auto-recuperación del navegador (igual que ``fetch``).
         """
-        if not self._browser:
-            await self.start()
-
         domain = urlparse(url).netloc
-        await self._random_delay()
-        await self._wait_for_rate_limit(domain)
 
-        captured: list[dict] = []
+        async def _op() -> tuple[str, list[dict]]:
+            await self._random_delay()
+            await self._wait_for_rate_limit(domain)
 
-        async def _on_response(response):
+            captured: list[dict] = []
+
+            async def _on_response(response):
+                try:
+                    if url_pattern in response.url and "json" in (
+                        response.headers.get("content-type", "")
+                    ):
+                        body = await response.json()
+                        captured.append(body)
+                except Exception:
+                    pass
+
+            ua = random.choice(_USER_AGENTS)
+            viewport = random.choice(_VIEWPORTS)
+            timezone = random.choice(_TIMEZONES)
+            stealth_script = _build_stealth_script(ua)
+
+            context = await self._browser.new_context(
+                viewport=viewport,
+                user_agent=ua,
+                locale="es-ES",
+                timezone_id=timezone,
+                java_script_enabled=True,
+            )
+            await self._restore_cookies(context, domain)
+            page = await context.new_page()
+            await page.add_init_script(stealth_script)
+
+            page.on("response", _on_response)
+
             try:
-                if url_pattern in response.url and "json" in (
-                    response.headers.get("content-type", "")
-                ):
-                    body = await response.json()
-                    captured.append(body)
-            except Exception:
-                pass
+                logger.info("INTERCEPT navegando a %s (pattern=%s)", url, url_pattern)
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
-        ua = random.choice(_USER_AGENTS)
-        viewport = random.choice(_VIEWPORTS)
-        timezone = random.choice(_TIMEZONES)
-        stealth_script = _build_stealth_script(ua)
+                # Wait for XHR responses to arrive
+                wait_ms = timeout
+                await page.wait_for_timeout(wait_ms)
 
-        context = await self._browser.new_context(
-            viewport=viewport,
-            user_agent=ua,
-            locale="es-ES",
-            timezone_id=timezone,
-            java_script_enabled=True,
-        )
-        await self._restore_cookies(context, domain)
-        page = await context.new_page()
-        await page.add_init_script(stealth_script)
+                html = await page.content()
+                await self._save_cookies(context, domain)
+                logger.info("INTERCEPT capturó %d respuestas JSON", len(captured))
+                return html, captured
+            finally:
+                await context.close()
 
-        page.on("response", _on_response)
-
-        try:
-            logger.info("INTERCEPT navegando a %s (pattern=%s)", url, url_pattern)
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-
-            # Wait for XHR responses to arrive
-            wait_ms = timeout
-            await page.wait_for_timeout(wait_ms)
-
-            html = await page.content()
-            await self._save_cookies(context, domain)
-            logger.info("INTERCEPT capturó %d respuestas JSON", len(captured))
-            return html, captured
-        finally:
-            await context.close()
+        return await self._with_recovery(_op, url)
 
     # ------------------------------------------------------------------
     # Cloudflare Turnstile challenge wait
