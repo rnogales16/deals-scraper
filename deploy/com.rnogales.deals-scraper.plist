@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rnogales.deals-scraper</string>
+
+    <!-- python del venv + main.py en modo daemon -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/rnogales/Desktop/deals-scraper/venv/bin/python</string>
+        <string>/Users/rnogales/Desktop/deals-scraper/main.py</string>
+        <string>--daemon</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/rnogales/Desktop/deals-scraper</string>
+
+    <!-- Arrancar al iniciar sesión / cargar el agente -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Watchdog: revivir el proceso si muere (equivale a Restart=always) -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Mínimo 30s entre relanzamientos (equivale a RestartSec=30) -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- launchd NO hereda el entorno del shell ni lee bien el .env desde
+         ~/Desktop, así que los secretos se inyectan aquí. El token NO se sube
+         a git: en la copia del repo queda un placeholder y el instalador
+         (deploy/install-macos.sh) pone el valor real en la copia de
+         ~/Library/LaunchAgents/. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>TELEGRAM_BOT_TOKEN</key>
+        <string>__SET_TELEGRAM_BOT_TOKEN__</string>
+    </dict>
+
+    <!-- Logs del daemon (stdout + stderr) -->
+    <key>StandardOutPath</key>
+    <string>/Users/rnogales/Desktop/deals-scraper/logs/daemon.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/rnogales/Desktop/deals-scraper/logs/daemon.err.log</string>
+</dict>
+</plist>
