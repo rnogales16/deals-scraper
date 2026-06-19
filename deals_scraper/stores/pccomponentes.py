@@ -38,6 +38,13 @@ def _parse_price(text: str | None) -> float | None:
         cleaned = cleaned.replace(".", "").replace(",", ".")
     elif "," in cleaned:
         cleaned = cleaned.replace(",", ".")
+    elif "." in cleaned:
+        # Texto en formato español: la coma es el decimal, así que un punto
+        # solo (sin coma) que agrupa de 3 en 3 es separador de miles
+        # ("1.999€" = 1999, "1.299.000€" = 1299000), no un decimal.
+        parts = cleaned.split(".")
+        if all(len(p) == 3 for p in parts[1:]):
+            cleaned = cleaned.replace(".", "")
     match = re.search(r"[\d]+\.?\d*", cleaned)
     return float(match.group()) if match else None
 
