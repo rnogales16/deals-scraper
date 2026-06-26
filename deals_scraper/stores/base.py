@@ -39,7 +39,8 @@ class BaseStore(ABC):
         self.config = config
         self.http_client = http_client
         self.browser_client = browser_client
-        self._url_semaphore = asyncio.Semaphore(max_concurrent_urls)
+        self._max_concurrent_urls = max_concurrent_urls
+        self._url_semaphore: asyncio.Semaphore | None = None
 
     @property
     def name(self) -> str:
@@ -66,6 +67,8 @@ class BaseStore(ABC):
         urls = await self.build_urls()
 
         async def _scrape_url(url: str) -> list[Deal]:
+            if self._url_semaphore is None:
+                self._url_semaphore = asyncio.Semaphore(self._max_concurrent_urls)
             async with self._url_semaphore:
                 try:
                     html = await self._fetch(url)
@@ -108,7 +111,9 @@ class BaseStore(ABC):
             if not self.browser_client:
                 raise RuntimeError(f"[{self.name}] Necesita browser_client pero no se proporcionó")
             return await self.browser_client.fetch(
-                url, force_stealth=self.config.force_stealth,
+                url,
+                force_stealth=self.config.force_stealth,
+                wait_for_selector=self.config.wait_for_selector,
             )
         else:
             if not self.http_client:

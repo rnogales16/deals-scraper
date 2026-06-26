@@ -3,6 +3,22 @@
 
 # =======================================================================
 # WATCHLIST — Alertar cuando se vean productos a buen precio
+#
+# Campos por producto:
+#   name        (obligatorio) substring a buscar en el título del deal.
+#   max_price   (obligatorio) precio MÁXIMO para alertar = LÍMITE DE ALERTA.
+#                             NO es el PVP ni el precio de mercado.
+#   min_price   (opcional)    precio mínimo (descarta gangas imposibles/fake).
+#   msrp        (OPCIONAL)    PVP OFICIAL REAL del producto (precio de venta
+#                             recomendado). Si se define, el descuento de
+#                             watchlist se calcula contra este valor, NO contra
+#                             max_price. Déjalo SIN poner si no sabes el PVP real:
+#                             en ese caso se usa el market_price (Idealo/cross-
+#                             store) si lo hay, y si tampoco, el deal solo alerta
+#                             por descuento real de tienda o error de precio
+#                             absoluto (nunca por un descuento sintético).
+#                             ⚠️ Debe ser el PVP REAL — no inventar valores.
+#   exclude_keywords (opcional) términos que descartan el match (accesorios…).
 # =======================================================================
 watchlist:
   enabled: true
@@ -518,7 +534,11 @@ cross_store:
 
 telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
-  chat_id: "201330690"
+  chat_id: "201330690"          # fallback / compatibilidad (si no hay canales)
+  # Dos canales: crea ambos en Telegram y pega aquí sus chat_id (empiezan por -100…).
+  # Si quedan vacíos, se usa chat_id de arriba para todo (compatibilidad).
+  chat_id_errores: ""           # CANAL ERRORES: descuento >= 85% confirmado (prioridad máxima)
+  chat_id_chollos: ""           # CANAL CHOLLOS: 60-85% según liquidez de reventa
   max_offers_per_cycle: 10
 
 market_price:
@@ -528,13 +548,14 @@ market_price:
   cross_store_fuzzy_threshold: 80
 
 filters:
-  min_discount: 50
+  min_discount: 70
   price_min: 0.01
   price_max: 5000.0
   keywords: []
   categories: []
-  real_discount_min: 50
-  min_observations: 2
+  real_discount_min: 70
+  min_observations: 5
+  min_savings: 80   # ahorro absoluto mínimo en euros (reventa)
   exclude_keywords:
     # Cosméticos / cuidado personal
     - "polvos"
@@ -583,9 +604,11 @@ filters:
 # Modo velocidad: "fast" (1-2.5s/URL, paralelo) o "stealth" (8-24s/URL, secuencial)
 speed:
   mode: fast
-  max_concurrent_stores: 5
-  max_concurrent_urls_per_store: 4
-  price_error_threshold: 65   # % descuento para considerar error de precio (alto = más estricto)
+  # En un Mac compartido, 12×8=96 páginas Chromium agotaban la RAM y macOS
+  # mataba el navegador (89k errores "Connection closed"). 4×3=12 páginas máx.
+  max_concurrent_stores: 4
+  max_concurrent_urls_per_store: 3
+  price_error_threshold: 75   # % descuento para considerar error de precio (alto = más estricto)
 
 anti_ban:
   delay_min: 0.5
@@ -655,7 +678,7 @@ stores:
   # -------------------------------------------------------------------
   # PCComponentes: Cloudflare Turnstile bloquea headless — necesita proxy
   - name: pccomponentes
-    enabled: false
+    enabled: true
     interval_minutes: 5
     client_type: browser
     scrape_urls:
@@ -711,18 +734,72 @@ stores:
   # EL CORTE INGLÉS — Stealth mode para evitar Akamai bot detection
   # -------------------------------------------------------------------
   - name: elcorteingles
-    enabled: false  # ERR_HTTP2_PROTOCOL_ERROR — bloqueo a nivel red
-    interval_minutes: 30
+    enabled: true
+    interval_minutes: 5
     client_type: browser
-    force_stealth: true
+    use_system_chrome: true
+    wait_for_selector: ".price-sale, .price-unit--normal"
     scrape_urls:
+      # --- Ofertas por categoría ---
       - "https://www.elcorteingles.es/electronica/ofertas/"
+      - "https://www.elcorteingles.es/electrodomesticos/ofertas/"
+      - "https://www.elcorteingles.es/deportes/ofertas/"
+      - "https://www.elcorteingles.es/videojuegos/ofertas/"
+      - "https://www.elcorteingles.es/libros/ofertas/"
+      - "https://www.elcorteingles.es/musica/ofertas/"
+      - "https://www.elcorteingles.es/papeleria/ofertas/"
+      - "https://www.elcorteingles.es/juguetes/ofertas/"
+      - "https://www.elcorteingles.es/relojes/ofertas/"
+      - "https://www.elcorteingles.es/perfumeria/ofertas/"
+      - "https://www.elcorteingles.es/moda-hombre/ofertas/"
+      - "https://www.elcorteingles.es/moda-mujer/ofertas/"
+      - "https://www.elcorteingles.es/moda-infantil/ofertas/"
+      - "https://www.elcorteingles.es/bebes/ofertas/"
+      - "https://www.elcorteingles.es/mascotas/ofertas/"
+      - "https://www.elcorteingles.es/accesorios/ofertas/"
+      - "https://www.elcorteingles.es/informatica/ofertas/"
+      # --- Apple ---
+      - "https://www.elcorteingles.es/search/?s=macbook"
+      - "https://www.elcorteingles.es/search/?s=macbook+air"
+      - "https://www.elcorteingles.es/search/?s=macbook+pro"
+      - "https://www.elcorteingles.es/search/?s=ipad"
+      - "https://www.elcorteingles.es/search/?s=iphone"
+      - "https://www.elcorteingles.es/search/?s=apple+watch"
+      - "https://www.elcorteingles.es/search/?s=airpods"
+      - "https://www.elcorteingles.es/informatica/portatiles-apple/"
+      # --- Reacondicionados ---
+      - "https://www.elcorteingles.es/search/?s=macbook+reacondicionado"
+      - "https://www.elcorteingles.es/search/?s=apple+reacondicionado"
+      - "https://www.elcorteingles.es/informatica/reacondicionados/"
+      - "https://www.elcorteingles.es/electronica/reacondicionados/"
+      - "https://www.elcorteingles.es/search/?s=portatil+reacondicionado"
+      # --- Marcas tech ---
+      - "https://www.elcorteingles.es/search/?s=samsung+galaxy"
+      - "https://www.elcorteingles.es/search/?s=playstation+5"
+      - "https://www.elcorteingles.es/search/?s=nintendo+switch"
+      - "https://www.elcorteingles.es/search/?s=sony"
+      - "https://www.elcorteingles.es/search/?s=xiaomi"
+      - "https://www.elcorteingles.es/search/?s=lg+tv"
+      - "https://www.elcorteingles.es/search/?s=bose"
+      - "https://www.elcorteingles.es/search/?s=garmin"
+      - "https://www.elcorteingles.es/search/?s=gopro"
+      - "https://www.elcorteingles.es/search/?s=kindle"
+      - "https://www.elcorteingles.es/search/?s=lego"
+      # --- Productos tech ---
+      - "https://www.elcorteingles.es/search/?s=monitor+gaming"
+      - "https://www.elcorteingles.es/search/?s=ssd"
+      - "https://www.elcorteingles.es/search/?s=tarjeta+grafica"
+      - "https://www.elcorteingles.es/search/?s=robot+aspirador"
+      - "https://www.elcorteingles.es/search/?s=auriculares+bluetooth"
+      # --- Moda/Deporte marcas ---
+      - "https://www.elcorteingles.es/search/?s=adidas"
+      - "https://www.elcorteingles.es/search/?s=the+north+face"
 
   # -------------------------------------------------------------------
   # FNAC — Disabled: Queue-it bot protection returns 403
   # -------------------------------------------------------------------
   - name: fnac
-    enabled: false
+    enabled: false  # Respuesta vacía (~39 bytes) — bloqueo anti-bot
     interval_minutes: 45
     client_type: browser
     scrape_urls:
@@ -793,7 +870,7 @@ stores:
   # CARREFOUR — Disabled: Cloudflare redirects to homepage
   # -------------------------------------------------------------------
   - name: carrefour
-    enabled: false
+    enabled: false  # SPA no renderiza productos al scrapear — 0 ofertas
     interval_minutes: 60
     client_type: browser
     scrape_urls:
@@ -807,6 +884,7 @@ stores:
     interval_minutes: 8
     client_type: browser
     force_stealth: false  # Ya no necesario tras fix de bloqueo CSS
+    wait_for_selector: ".search-item:not(.is-template):not(.hidden)"
     scrape_urls:
       - "https://www.game.es/VIDEOJUEGOS/PLAYSTATION-5"
       - "https://www.game.es/VIDEOJUEGOS/NINTENDO-SWITCH"
@@ -862,7 +940,7 @@ stores:
   # MIRAVIA
   # -------------------------------------------------------------------
   - name: miravia
-    enabled: false  # Captcha Interception — no se puede saltar
+    enabled: false  # Captcha Interception (Baxia de Alibaba) — no se puede saltar
     interval_minutes: 5
     client_type: browser
     force_stealth: true
@@ -921,10 +999,10 @@ stores:
       - "https://www.ldlc.com/es/informatica/pieza-grafica/tarjeta-grafica-interna/c4684/"
       - "https://www.ldlc.com/es/informatica/monitor-pc/c4623/"
       - "https://www.ldlc.com/es/informatica/procesador/c4300/"
-      - "https://www.ldlc.com/es/informatica/almacenamiento/disco-duro-ssd/c4823/"
+      - "https://www.ldlc.com/informatique/pieces-informatique/disque-ssd/c4698/"
       - "https://www.ldlc.com/es/informatica/periferico-pc/raton/c4657/"
-      - "https://www.ldlc.com/es/informatica/periferico-pc/teclado/c4649/"
-      - "https://www.ldlc.com/es/sonido/auriculares/c4827/"
+      - "https://www.ldlc.com/informatique/peripherique-pc/clavier/c4606/"
+      - "https://www.ldlc.com/image-son/son-numerique/casque/c4380/"
 
   # -------------------------------------------------------------------
   # SAMSUNG ESPAÑA
@@ -1180,7 +1258,7 @@ stores:
     scrape_urls:
       - "https://www.electrocosto.com/televisores"
       - "https://www.electrocosto.com/portatiles"
-      - "https://www.electrocosto.com/smartphones"
+      - "https://www.electrocosto.com/tablets"
       - "https://www.electrocosto.com/electrodomesticos"
 
   # -------------------------------------------------------------------
@@ -1213,7 +1291,7 @@ stores:
   # que no renderiza en el DOM capturado por Playwright. No viable.
   # -------------------------------------------------------------------
   - name: lenovo
-    enabled: false
+    enabled: false  # Captcha/"verify you" — 0 ofertas por el scraper
     interval_minutes: 15
     client_type: browser
     scrape_urls:

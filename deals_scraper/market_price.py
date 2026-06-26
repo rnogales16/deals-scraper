@@ -206,7 +206,7 @@ def _lookup_cross_store(
     cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
     cur = db.conn.cursor()
     cur.execute(
-        "SELECT title, store, current_price FROM deals "
+        "SELECT title, store, current_price, product_id FROM deals "
         "WHERE store != ? AND updated_at >= ? AND current_price > 0",
         (deal.store, cutoff),
     )
@@ -223,14 +223,20 @@ def _lookup_cross_store(
         if row["store"] == deal.store:
             continue
 
-        ratio = fuzz.token_set_ratio(deal.title, row["title"])
-        if ratio < fuzzy_threshold:
-            continue
-
-        # Variant tags must match
-        row_tags = db._extract_variant_tags(row["title"])
-        if deal_variant_tags != row_tags:
-            continue
+        # Match por product_id EXACTO cuando AMBOS lo tienen; el fuzzy de título
+        # queda como fallback solo cuando a uno de los dos le falta el product_id.
+        if deal.product_id and row["product_id"]:
+            if deal.product_id != row["product_id"]:
+                continue  # ids distintos → producto distinto
+            # ids iguales → mismo producto confirmado (sin fuzzy ni variante)
+        else:
+            ratio = fuzz.token_set_ratio(deal.title, row["title"])
+            if ratio < fuzzy_threshold:
+                continue
+            # Variant tags must match
+            row_tags = db._extract_variant_tags(row["title"])
+            if deal_variant_tags != row_tags:
+                continue
 
         # Don't count multiple matches from same store
         if row["store"] in seen_stores:
@@ -300,7 +306,8 @@ class IdealoScraper:
     ) -> None:
         self._browser = browser_client
         self._max_per_cycle = max_per_cycle
-        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._max_concurrent = max_concurrent
+        self._semaphore: asyncio.Semaphore | None = None
         self._lookups_done = 0
 
     async def lookup(self, deal: Deal) -> float | None:
@@ -314,6 +321,8 @@ class IdealoScraper:
         if not query:
             return None
 
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
         async with self._semaphore:
             if self._lookups_done >= self._max_per_cycle:
                 return None

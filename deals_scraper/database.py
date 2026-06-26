@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS deals (
     category        TEXT DEFAULT '',
     currency        TEXT DEFAULT 'EUR',
     image_url       TEXT DEFAULT '',
+    product_id      TEXT,
     detected_at     TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     sent_to_telegram INTEGER DEFAULT 0
@@ -38,7 +39,8 @@ CREATE TABLE IF NOT EXISTS price_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     deal_id     INTEGER NOT NULL REFERENCES deals(id),
     price       REAL NOT NULL,
-    detected_at TEXT NOT NULL
+    detected_at TEXT NOT NULL,
+    product_id  TEXT
 );
 """
 
@@ -82,15 +84,35 @@ class Database:
         cur.execute(_CREATE_PRICE_HISTORY)
         cur.execute(_CREATE_MARKET_PRICES)
         cur.execute(_CREATE_WATCHLIST)
+        # Migraciones idempotentes para BDs creadas antes de añadir columnas nuevas
+        self._migrate(cur)
         # Índices para acelerar queries frecuentes
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_store_cat ON deals(store, category)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_updated ON deals(updated_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_sent ON deals(sent_to_telegram)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_deals_product_id ON deals(product_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ph_deal ON price_history(deal_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ph_product_id ON price_history(product_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mp_title ON market_prices(normalized_title)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mp_expires ON market_prices(expires_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_name ON watchlist(name)")
         self.conn.commit()
+
+    def _migrate(self, cur: sqlite3.Cursor) -> None:
+        """Migraciones idempotentes: añade columnas nuevas a BDs ya existentes.
+
+        Comprueba PRAGMA table_info antes de cada ALTER, así que es seguro
+        ejecutarlo en cada arranque y sobre BDs ya migradas o nuevas.
+        """
+        deals_cols = {row[1] for row in cur.execute("PRAGMA table_info(deals)").fetchall()}
+        if "product_id" not in deals_cols:
+            cur.execute("ALTER TABLE deals ADD COLUMN product_id TEXT")
+            logger.info("Migración DB: columna 'product_id' añadida a deals")
+
+        ph_cols = {row[1] for row in cur.execute("PRAGMA table_info(price_history)").fetchall()}
+        if "product_id" not in ph_cols:
+            cur.execute("ALTER TABLE price_history ADD COLUMN product_id TEXT")
+            logger.info("Migración DB: columna 'product_id' añadida a price_history")
 
     # ------------------------------------------------------------------
     # Upsert — ahora SIEMPRE registra el precio en el historial
@@ -112,14 +134,14 @@ class Database:
             cur.execute(
                 """INSERT INTO deals
                    (url, title, store, current_price, original_price,
-                    discount_pct, category, currency, image_url,
+                    discount_pct, category, currency, image_url, product_id,
                     detected_at, updated_at, sent_to_telegram)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
                 (
                     deal.url, deal.title, deal.store,
                     deal.current_price, deal.original_price,
                     deal.discount_pct, deal.category, deal.currency,
-                    deal.image_url, now, now,
+                    deal.image_url, deal.product_id, now, now,
                 ),
             )
             deal_id = cur.lastrowid
@@ -132,6 +154,7 @@ class Database:
                 """UPDATE deals SET
                      title = ?, current_price = ?, original_price = ?,
                      discount_pct = ?, category = ?, image_url = ?,
+                     product_id = COALESCE(?, product_id),
                      updated_at = ?,
                      sent_to_telegram = CASE WHEN ? != current_price THEN 0
                                              ELSE sent_to_telegram END
@@ -139,14 +162,17 @@ class Database:
                 (
                     deal.title, deal.current_price, deal.original_price,
                     deal.discount_pct, deal.category, deal.image_url,
-                    now, deal.current_price, deal_id,
+                    deal.product_id, now, deal.current_price, deal_id,
                 ),
             )
 
-        # SIEMPRE registrar el precio en el historial
+        # SIEMPRE registrar el precio en el historial, con el product_id observado
+        # en este scrape (permite agrupar por producto y evitar historial envenenado
+        # cuando una URL cambia de producto).
         cur.execute(
-            "INSERT INTO price_history (deal_id, price, detected_at) VALUES (?, ?, ?)",
-            (deal_id, deal.current_price, now),
+            "INSERT INTO price_history (deal_id, price, detected_at, product_id) "
+            "VALUES (?, ?, ?, ?)",
+            (deal_id, deal.current_price, now, deal.product_id),
         )
 
         self.conn.commit()
@@ -155,32 +181,18 @@ class Database:
     # ------------------------------------------------------------------
     # Historial de precios — para detectar ofertas falsas
     # ------------------------------------------------------------------
-    def get_price_stats(self, deal_id: int) -> dict[str, Any] | None:
-        """Estadísticas del historial de precios de un producto.
-
-        Returns:
-            Dict con: observations, min, max, median, mean, current, real_discount_pct
-            o None si no hay historial.
-        """
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT price FROM price_history WHERE deal_id = ? ORDER BY detected_at",
-            (deal_id,),
-        )
-        rows = cur.fetchall()
-        if not rows:
+    @staticmethod
+    def _stats_from_prices(prices: list[float]) -> dict[str, Any] | None:
+        """Calcula las estadísticas a partir de una lista de precios ordenada
+        por fecha (el último es el actual). Devuelve None si la lista está vacía."""
+        if not prices:
             return None
-
-        prices = [r["price"] for r in rows]
         current = prices[-1]
         median = statistics.median(prices)
-
-        # Descuento real = cuánto ha bajado vs la mediana histórica
         if median > 0 and current < median:
             real_discount = round((1 - current / median) * 100, 1)
         else:
             real_discount = 0.0
-
         return {
             "observations": len(prices),
             "min": min(prices),
@@ -191,6 +203,36 @@ class Database:
             "real_discount_pct": real_discount,
         }
 
+    def get_price_stats(self, deal_id: int) -> dict[str, Any] | None:
+        """Estadísticas del historial de precios de un deal (por deal_id = URL).
+
+        Returns:
+            Dict con: observations, min, max, median, mean, current, real_discount_pct
+            o None si no hay historial.
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT price FROM price_history WHERE deal_id = ? ORDER BY detected_at",
+            (deal_id,),
+        )
+        return self._stats_from_prices([r["price"] for r in cur.fetchall()])
+
+    def get_price_stats_by_product_id(self, product_id: str) -> dict[str, Any] | None:
+        """Estadísticas del historial agrupado por product_id (EAN/ASIN).
+
+        Agrega los precios de TODAS las URLs/filas que se observaron con este
+        product_id, evitando el "historial envenenado" cuando una URL cambia de
+        producto (cada observación quedó marcada con su product_id real).
+        """
+        if not product_id:
+            return None
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT price FROM price_history WHERE product_id = ? ORDER BY detected_at",
+            (product_id,),
+        )
+        return self._stats_from_prices([r["price"] for r in cur.fetchall()])
+
     def get_price_stats_by_url(self, url: str) -> dict[str, Any] | None:
         """Igual que get_price_stats pero busca por URL."""
         cur = self.conn.cursor()
@@ -199,6 +241,28 @@ class Database:
         if not row:
             return None
         return self.get_price_stats(row["id"])
+
+    def get_max_price_by_product_id_other_store(
+        self, product_id: str, store: str, hours: int = 168,
+    ) -> float | None:
+        """Precio MÁXIMO del mismo product_id visto en OTRA tienda (ventana reciente).
+
+        Confirma externamente un valor alto: si el mismo EAN/ASIN se vende caro en
+        otra tienda, el valor alto no es un PVP inventado por la tienda del deal.
+        """
+        if not product_id:
+            return None
+        from datetime import timedelta
+
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT MAX(current_price) AS mx FROM deals "
+            "WHERE product_id = ? AND store != ? AND updated_at >= ? AND current_price > 0",
+            (product_id, store, cutoff),
+        )
+        row = cur.fetchone()
+        return row["mx"] if row and row["mx"] else None
 
     # ------------------------------------------------------------------
     # Percentiles por tienda/categoría (para detección de precios absurdos)
@@ -455,12 +519,17 @@ class Database:
         # Filtrar títulos basura (slugs de búsqueda como "samsung", "apple")
         deals = [d for d in deals if len(d.title.strip()) >= 10]
 
-        # Paso 1: agrupar por título exacto (normalizado a minúsculas, strip)
-        groups: dict[str, list[Deal]] = {}
+        # Paso 1: agrupar por product_id EXACTO (EAN/ASIN) si lo tiene; si no,
+        # por título exacto (normalizado). Dos productos con product_id distinto
+        # nunca caen en el mismo grupo aunque el título sea parecido.
+        groups: dict = {}
         unmatched: list[Deal] = []
 
         for deal in deals:
-            key = deal.title.strip().lower()
+            if deal.product_id:
+                key = ("pid", deal.product_id)
+            else:
+                key = ("title", deal.title.strip().lower())
             if key not in groups:
                 groups[key] = []
             groups[key].append(deal)
@@ -505,6 +574,12 @@ class Database:
                             continue
                         if d1.store == d2.store:
                             continue
+                        # Si AMBOS tienen product_id y son distintos, NO es el
+                        # mismo producto (el fuzzy es fallback solo cuando a uno
+                        # de los dos le falta el product_id).
+                        if (d1.product_id and d2.product_id
+                                and d1.product_id != d2.product_id):
+                            continue
                         ratio = fuzz.token_set_ratio(d1.title, d2.title)
                         if ratio >= fuzzy_threshold:
                             # Verificar que las variantes coinciden
@@ -524,13 +599,21 @@ class Database:
         # Sub-agrupar por variante para evitar comparar Pro vs no-Pro
         pairs: list[tuple[Deal, Deal]] = []
         for group in multi_store_groups:
-            # Sub-agrupar por variante dentro del grupo
-            variant_subgroups: dict[frozenset, list[Deal]] = {}
-            for d in group:
-                vtags = frozenset(self._extract_variant_tags(d.title))
-                if vtags not in variant_subgroups:
-                    variant_subgroups[vtags] = []
-                variant_subgroups[vtags].append(d)
+            # Si el grupo está unido por product_id (todos el mismo), NO sub-dividir
+            # por variante: el product_id ya garantiza que es el mismo producto,
+            # aunque los títulos difieran entre tiendas.
+            group_pids = {d.product_id for d in group if d.product_id}
+            same_product_id = len(group_pids) == 1 and all(d.product_id for d in group)
+            if same_product_id:
+                variant_subgroups: dict[frozenset, list[Deal]] = {frozenset(): group}
+            else:
+                # Sub-agrupar por variante dentro del grupo
+                variant_subgroups = {}
+                for d in group:
+                    vtags = frozenset(self._extract_variant_tags(d.title))
+                    if vtags not in variant_subgroups:
+                        variant_subgroups[vtags] = []
+                    variant_subgroups[vtags].append(d)
 
             for subgroup in variant_subgroups.values():
                 stores_in_sub = {d.store for d in subgroup}
@@ -698,6 +781,7 @@ class Database:
             category=row["category"],
             currency=row["currency"],
             image_url=row["image_url"],
+            product_id=row["product_id"],
             detected_at=datetime.fromisoformat(row["detected_at"]),
             sent_to_telegram=bool(row["sent_to_telegram"]),
         )

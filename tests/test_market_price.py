@@ -286,6 +286,34 @@ class TestCrossStoreLookup:
         # store1 has Pro, store2 doesn't -> variant mismatch -> only 1 valid match
         assert result is None
 
+    def test_product_id_exact_match(self, tmp_db):
+        """Con product_id en ambos lados, empareja por id exacto pese a títulos distintos."""
+        tmp_db.upsert_deal(_make_deal(
+            title="Sony WH-1000XM5", url="https://a.com/1", store="amazon",
+            current_price=300.0, product_id="ean:111"))
+        tmp_db.upsert_deal(_make_deal(
+            title="Auriculares Sony XM5 Negro", url="https://c.com/1", store="coolmod",
+            current_price=320.0, product_id="ean:111"))
+        deal = _make_deal(title="WH1000XM5", store="ldlc", current_price=290.0,
+                          product_id="ean:111")
+        result = _lookup_cross_store(deal, tmp_db, fuzzy_threshold=80)
+        assert result is not None  # 2 matches por product_id (amazon, coolmod)
+        assert 300 <= result <= 320
+
+    def test_product_id_different_not_matched(self, tmp_db):
+        """product_id distinto no cuenta como match aunque el título sea idéntico."""
+        tmp_db.upsert_deal(_make_deal(
+            title="Sony WH-1000XM5", url="https://a.com/1", store="amazon",
+            current_price=300.0, product_id="ean:111"))
+        tmp_db.upsert_deal(_make_deal(
+            title="Sony WH-1000XM5", url="https://c.com/1", store="coolmod",
+            current_price=320.0, product_id="ean:222"))
+        deal = _make_deal(title="Sony WH-1000XM5", store="ldlc", current_price=290.0,
+                          product_id="ean:111")
+        result = _lookup_cross_store(deal, tmp_db, fuzzy_threshold=80)
+        # Solo amazon (ean:111) matchea; coolmod (ean:222) excluido → <2 matches
+        assert result is None
+
 
 # ===========================================================================
 # 4. IDEALO SCRAPER

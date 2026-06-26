@@ -210,6 +210,27 @@ def _jsonld_image(obj: dict) -> str:
     return str(img) if img else ""
 
 
+# Campos de identificador (EAN/GTIN) en objetos Product de JSON-LD, por orden
+# de preferencia.
+_JSONLD_GTIN_FIELDS = ("gtin13", "gtin", "gtin8", "ean")
+
+
+def _extract_jsonld_ean(obj: dict) -> str | None:
+    """Extrae el EAN/GTIN de un objeto Product de JSON-LD.
+
+    Devuelve solo los dígitos del primer campo presente, o None si no hay
+    ninguno válido.
+    """
+    for field_name in _JSONLD_GTIN_FIELDS:
+        val = obj.get(field_name)
+        if val is None:
+            continue
+        digits = re.sub(r"\D", "", str(val))
+        if digits:
+            return digits
+    return None
+
+
 def _deal_from_jsonld_product(obj: dict, page_url: str, store_name: str) -> Deal | None:
     title = obj.get("name", "")
     if not title:
@@ -219,6 +240,10 @@ def _deal_from_jsonld_product(obj: dict, page_url: str, store_name: str) -> Deal
     product_url = _resolve_url(obj.get("url") or obj.get("@id"), page_url)
     image_url = _jsonld_image(obj)
 
+    # Identificador único de producto (EAN/GTIN) si el Product lo declara
+    ean = _extract_jsonld_ean(obj)
+    product_id = f"ean:{ean}" if ean else None
+
     offers = obj.get("offers", {})
     if isinstance(offers, list):
         offers = offers[0] if offers else {}
@@ -226,7 +251,10 @@ def _deal_from_jsonld_product(obj: dict, page_url: str, store_name: str) -> Deal
     if not isinstance(offers, dict):
         offers = {}
 
-    return _deal_from_jsonld_offer(offers, page_url, store_name, title=title, product_url=product_url, image_url=image_url)
+    return _deal_from_jsonld_offer(
+        offers, page_url, store_name, title=title,
+        product_url=product_url, image_url=image_url, product_id=product_id,
+    )
 
 
 def _deal_from_jsonld_offer(
@@ -236,6 +264,7 @@ def _deal_from_jsonld_offer(
     title: str,
     product_url: str = "",
     image_url: str = "",
+    product_id: str | None = None,
 ) -> Deal | None:
     if not title:
         title = str(offers.get("name", "")).strip()
@@ -276,6 +305,7 @@ def _deal_from_jsonld_offer(
         original_price=original_price,
         currency=currency,
         image_url=image_url,
+        product_id=product_id,
     )
 
 
@@ -636,6 +666,7 @@ class GenericStore(BaseStore):
         ".dne-itemtile",                            # eBay deals
         "li.s-item",                                # eBay search
         "[data-testid='listing-product-card']",      # IKEA offers
+        "[data-testid='plp-product-card']",          # IKEA new products
         # Class-based (specific to e-commerce)
         "article.product",
         ".product-card",

@@ -8,6 +8,10 @@ venv/
 
 # Database
 *.db
+*.db-shm
+*.db-wal
+*.bak
+deals.db.bak-*
 
 # Logs
 *.log

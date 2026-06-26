@@ -207,27 +207,31 @@ class TestClassifyDeal:
         assert classify_deal(35.0) == "NORMAL"
 
     def test_chollo(self):
-        assert classify_deal(52.0, price_error_threshold=65.0) == "CHOLLO"
+        # 70-75% = CHOLLO (por debajo del umbral de error de precio 75)
+        assert classify_deal(72.0, price_error_threshold=75.0) == "CHOLLO"
 
     def test_error_de_precio(self):
-        assert classify_deal(55.0) == "ERROR_DE_PRECIO"
+        assert classify_deal(80.0) == "ERROR_DE_PRECIO"
 
-    def test_boundary_50_is_error_at_default_threshold(self):
-        # Default price_error_threshold=50, so 50% = ERROR
-        assert classify_deal(50.0) == "ERROR_DE_PRECIO"
+    def test_boundary_75_is_error_at_default_threshold(self):
+        # Default price_error_threshold=75, so 75% = ERROR
+        assert classify_deal(75.0) == "ERROR_DE_PRECIO"
 
-    def test_boundary_65_error(self):
-        assert classify_deal(65.0) == "ERROR_DE_PRECIO"
+    def test_boundary_70_is_chollo(self):
+        # 70% = CHOLLO exacto (umbral de chollo), por debajo del de error (75)
+        assert classify_deal(70.0) == "CHOLLO"
 
     def test_custom_threshold(self):
         assert classify_deal(45.0, price_error_threshold=40.0) == "ERROR_DE_PRECIO"
 
 
 class TestApplyFilters:
+    # store="backmarket" (reacondicionada) exime del filtro de marca, para
+    # aislar el filtro concreto que prueba cada test con títulos genéricos.
     def test_min_discount_filter(self):
         deals = [
-            _make_deal(title="A", current_price=80, original_price=100),  # 20%
-            _make_deal(title="B", current_price=95, original_price=100),  # 5%
+            _make_deal(title="A", current_price=80, original_price=100, store="backmarket"),  # 20%
+            _make_deal(title="B", current_price=95, original_price=100, store="backmarket"),  # 5%
         ]
         result = apply_filters(deals, {"min_discount": 15})
         assert len(result) == 1
@@ -235,9 +239,9 @@ class TestApplyFilters:
 
     def test_price_range_filter(self):
         deals = [
-            _make_deal(title="Cheap", current_price=5, discount_pct=50),
-            _make_deal(title="Mid", current_price=50, discount_pct=50),
-            _make_deal(title="Expensive", current_price=500, discount_pct=50),
+            _make_deal(title="Cheap", current_price=5, discount_pct=50, store="backmarket"),
+            _make_deal(title="Mid", current_price=50, discount_pct=50, store="backmarket"),
+            _make_deal(title="Expensive", current_price=500, discount_pct=50, store="backmarket"),
         ]
         result = apply_filters(deals, {"min_discount": 0, "price_min": 10, "price_max": 200})
         assert len(result) == 1
@@ -254,15 +258,15 @@ class TestApplyFilters:
 
     def test_categories_filter(self):
         deals = [
-            _make_deal(title="A", category="phones", discount_pct=20),
-            _make_deal(title="B", category="laptops", discount_pct=20),
+            _make_deal(title="A", category="phones", discount_pct=20, store="backmarket"),
+            _make_deal(title="B", category="laptops", discount_pct=20, store="backmarket"),
         ]
         result = apply_filters(deals, {"min_discount": 0, "categories": ["phones"]})
         assert len(result) == 1
         assert result[0].category == "phones"
 
     def test_no_filters_passes_all(self):
-        deals = [_make_deal(title=f"Deal {i}", discount_pct=20) for i in range(5)]
+        deals = [_make_deal(title=f"Deal {i}", discount_pct=20, store="backmarket") for i in range(5)]
         result = apply_filters(deals, {"min_discount": 0})
         assert len(result) == 5
 
@@ -270,6 +274,221 @@ class TestApplyFilters:
         d = _make_deal(current_price=50, original_price=100, discount_pct=0.0)
         apply_filters([d], {"min_discount": 0})
         assert d.discount_pct == 50.0
+
+
+class TestHasKnownBrand:
+    """Marca reconocida vs clones que mencionan una marca oportunistamente."""
+
+    def test_known_brand_accepted(self):
+        from deals_scraper.filters import _has_known_brand
+        # Marca real + término de género legítimo (no es señal de clon)
+        assert _has_known_brand("garmin forerunner para hombre") is True
+
+    def test_clone_estilo_rejected(self):
+        from deals_scraper.filters import _has_known_brand
+        # Menciona Apple pero "estilo" indica clon → False
+        assert _has_known_brand("smartwatch estilo apple") is False
+
+    def test_clone_tipo_rejected(self):
+        from deals_scraper.filters import _has_known_brand
+        assert _has_known_brand("auriculares tipo airpods") is False
+
+    def test_plain_known_brand_true(self):
+        from deals_scraper.filters import _has_known_brand
+        assert _has_known_brand("apple iphone 15 pro 256gb") is True
+
+    def test_no_brand_false(self):
+        from deals_scraper.filters import _has_known_brand
+        assert _has_known_brand("reloj inteligente militar 1.85 pulgadas") is False
+
+    def test_tipo_c_not_a_clone_signal(self):
+        from deals_scraper.filters import _has_known_brand
+        # "tipo C" (USB-C) no es señal de clon → Samsung real se acepta
+        assert _has_known_brand("cargador samsung usb tipo c 25w") is True
+
+    def test_estilo_descriptor_not_a_clone_signal(self):
+        from deals_scraper.filters import _has_known_brand
+        # "estilo deportivo" (descriptor) no es señal → Sony real se acepta
+        assert _has_known_brand("auriculares sony wh-1000xm5 estilo deportivo") is True
+
+    def test_tipo_plus_brand_is_clone(self):
+        from deals_scraper.filters import _has_known_brand
+        # "tipo + marca conocida" sí es clon
+        assert _has_known_brand("mando tipo switch para movil") is False
+
+    def test_new_appliance_brands_accepted(self):
+        from deals_scraper.filters import _has_known_brand
+        for t in ("lavadora balay 8kg", "sartén tefal ingenio",
+                  "cargador anker 65w usb-c", "honor magic 6 pro",
+                  "campana teka 60cm inox", "robot aspirador cecotec conga 9990"):
+            assert _has_known_brand(t) is True, t
+
+    def test_conga_percussion_not_matched(self):
+        from deals_scraper.filters import _has_known_brand
+        # Conga de percusión (Thomann): NO es la marca Cecotec aunque lleve "aspire"
+        assert _has_known_brand("conga lp aspire") is False
+        assert _has_known_brand("lp matador conga 11 pulgadas") is False
+
+    def test_cecotec_conga_matched(self):
+        from deals_scraper.filters import _has_known_brand
+        # Conga en contexto de robot/aspirador/cecotec SÍ es la marca
+        assert _has_known_brand("cecotec conga 9990") is True
+        assert _has_known_brand("robot aspirador conga 11090") is True
+
+    def test_candy_and_cata_restricted_to_context(self):
+        from deals_scraper.filters import _has_known_brand
+        assert _has_known_brand("lavadora candy smart pro 8kg") is True
+        assert _has_known_brand("candy crush saga peluche") is False
+        assert _has_known_brand("campana extractora cata tf-2003") is True
+        assert _has_known_brand("kit de cata de vinos 6 copas") is False
+
+
+class TestAccessoryFilterReinforced:
+    """Filtro de accesorio reforzado (_is_accessory_deal)."""
+
+    def test_funda_premium_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        assert _is_accessory_deal(
+            _make_deal(title="Funda iPhone 17 Pro Max", current_price=40)) is True
+
+    def test_real_phone_not_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        # Producto real sin keyword de accesorio y sin market_price → NO descartado
+        assert _is_accessory_deal(
+            _make_deal(title="iPhone 17 Pro Max 256GB", current_price=40)) is False
+
+    def test_cooler_para_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        assert _is_accessory_deal(
+            _make_deal(title="Cooler para RTX 4090", current_price=60)) is True
+
+    def test_cargador_para_macbook_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        assert _is_accessory_deal(
+            _make_deal(title="Cargador para MacBook", current_price=35)) is True
+
+    def test_soporte_para_brand_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        assert _is_accessory_deal(
+            _make_deal(title="Soporte para PS5", current_price=25)) is True
+
+    def test_legit_products_not_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        for t in ("Cooler Master MasterLiquid 360 AIO", "Disipador Noctua NH-D15",
+                  "Teclado de membrana Logitech"):
+            assert _is_accessory_deal(_make_deal(title=t, current_price=120)) is False, t
+
+    def test_premium_at_accessory_price_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        # Sin keyword pero nombra premium, market 1200, precio 30 (<15%), sin product_id
+        d = _make_deal(title="iPhone 15 Pro Edition Wrap", current_price=30, market_price=1200)
+        assert _is_accessory_deal(d) is True
+
+    def test_premium_with_product_id_not_discarded(self):
+        from deals_scraper.filters import _is_accessory_deal
+        # product_id (EAN/ASIN) confirma el producto real → no se sospecha
+        d = _make_deal(title="iPhone 15 Pro 256GB", current_price=40,
+                       market_price=1200, product_id="asin:B0XXXX")
+        assert _is_accessory_deal(d) is False
+
+
+class TestLiquidityTier:
+    """Umbral de descuento variable según la liquidez de reventa."""
+
+    def test_tiers_and_thresholds(self):
+        from deals_scraper.filters import liquidity_tier, liquidity_min_discount
+        alta = _make_deal(title="Apple iPhone 15 Pro 256GB")
+        media = _make_deal(title="Lenovo IdeaPad Slim 3")
+        baja = _make_deal(title="Aspirador generico XYZ 3000")
+        assert liquidity_tier(alta) == "alta" and liquidity_min_discount(alta) == 60.0
+        assert liquidity_tier(media) == "media" and liquidity_min_discount(media) == 70.0
+        assert liquidity_tier(baja) == "baja" and liquidity_min_discount(baja) == 80.0
+
+    def _with_history(self, db, title, url, hist, current):
+        for _ in range(5):
+            db.upsert_deal(_make_deal(title=title, url=url, current_price=hist))
+        did, _ = db.upsert_deal(_make_deal(title=title, url=url, current_price=current))
+        d = _make_deal(title=title, url=url, current_price=current)
+        d.id = did
+        return d
+
+    def test_apple_62_passes_high_liquidity(self, tmp_db):
+        # Apple (alta, umbral 60%): bajada del 62% se envía
+        d = self._with_history(tmp_db, "Apple iPhone 15 Pro 256GB", "https://x/a", 1000, 380)
+        verified = verify_real_deals([d], db=tmp_db, min_observations=5, min_savings=80)
+        assert len(verified) == 1
+
+    def test_unknown_brand_65_not_sent(self, tmp_db):
+        # Marca desconocida (baja, umbral 80%): bajada del 65% NO llega → no se envía
+        d = self._with_history(tmp_db, "Aspirador generico XYZ 3000", "https://x/b", 1000, 350)
+        verified = verify_real_deals([d], db=tmp_db, min_observations=5, min_savings=80)
+        assert len(verified) == 0
+
+
+class TestTelegramChannelRouting:
+    """Enrutado a canal ERRORES (>= 85%) vs CHOLLOS (60-85%)."""
+
+    @staticmethod
+    def _bot(errores="ERRORES", chollos="CHOLLOS"):
+        from deals_scraper.telegram_bot import TelegramBot
+        bot = TelegramBot.__new__(TelegramBot)
+        bot.chat_id = "MAIN"
+        bot.chat_id_errores = errores
+        bot.chat_id_chollos = chollos
+        bot._ERRORES_DISCOUNT = 85.0
+        return bot
+
+    def test_chollo_to_chollos_channel(self):
+        d = _make_deal(title="Apple iPhone 15", discount_pct=62.0)
+        assert self._bot()._chat_id_for(d) == "CHOLLOS"
+
+    def test_error_to_errores_channel(self):
+        d = _make_deal(title="cualquier cosa", discount_pct=90.0)
+        assert self._bot()._chat_id_for(d) == "ERRORES"
+
+    def test_fallback_when_no_channels(self):
+        # Sin canales configurados → ambos apuntan al chat_id principal
+        bot = self._bot(errores="MAIN", chollos="MAIN")
+        d = _make_deal(title="x", discount_pct=90.0)
+        assert bot._chat_id_for(d) == "MAIN"
+
+
+class TestExtremeDiscountException:
+    """Excepción del 90%: errores extremos sin confirmación se envían, marcados,
+    pero sin reabrir accesorio/clon."""
+
+    @staticmethod
+    def _run(tmp_db, title, current, original, market=None, pid=None):
+        d = _make_deal(title=title, url="https://x/" + title[:12].replace(" ", ""),
+                       store="elcorteingles", current_price=current,
+                       original_price=original, market_price=market, product_id=pid)
+        verified = verify_real_deals([d], db=tmp_db, min_observations=5,
+                                     price_error_threshold=75.0, min_savings=80)
+        return verified
+
+    def test_legit_brand_extreme_unconfirmed_sent(self, tmp_db):
+        # TV LG OLED -95% sin market/EAN/historial → AHORA se envía, marcado
+        v = self._run(tmp_db, "TV LG 55 OLED 4K", 100, 2000)
+        assert len(v) == 1
+        assert v[0].alert_tier == "ERROR_NO_CONFIRMADO"
+
+    def test_confirmed_extreme_stays_normal_tier(self, tmp_db):
+        # Mismo TV pero con market que confirma → ERROR_DE_PRECIO (no "no confirmado")
+        v = self._run(tmp_db, "TV LG 55 OLED 4K", 100, 2000, market=2000)
+        assert len(v) == 1
+        assert v[0].alert_tier == "ERROR_DE_PRECIO"
+
+    def test_accessory_still_discarded_even_extreme(self, tmp_db):
+        # Funda iPhone -97% → sigue descartada (accesorio), pese a la excepción
+        assert self._run(tmp_db, "Funda iPhone 17 Pro Max", 40, 1300) == []
+
+    def test_clone_still_discarded_even_extreme(self, tmp_db):
+        # "estilo AirPods" -95% → sigue descartado (clon)
+        assert self._run(tmp_db, "Auriculares estilo AirPods", 15, 300) == []
+
+    def test_below_90_still_requires_confirmation(self, tmp_db):
+        # -75% sin confirmación → no llega al 90% → no se envía
+        assert self._run(tmp_db, "Sony WH-1000XM5", 250, 1000) == []
 
 
 class TestNormalizeCategory:
@@ -337,9 +556,10 @@ class TestCheckWatchlist:
         assert result == []
 
     def test_substring_match(self):
-        """Match con store_discount >= 30% y >= min_discount."""
+        """Vía 1: descuento 70-85% (75%) y ahorro >= 80€ → CHOLLO (buen descuento,
+        no error de precio)."""
         deals = [_make_deal(title="Apple iPhone 15 128GB Azul Libre",
-                            current_price=300, original_price=600)]
+                            current_price=150, original_price=600)]  # 75%
         cfg = {
             "enabled": True,
             "products": [{"name": "iPhone 15", "max_price": 600}],
@@ -347,6 +567,33 @@ class TestCheckWatchlist:
         result = check_watchlist(deals, cfg, min_discount=45.0)
         assert len(result) == 1
         assert result[0].alert_tier == "CHOLLO"
+
+    def test_via1_huge_discount_is_error(self):
+        """Vía 1: descuento desorbitado (>85%), NO < 25% del límite, y CONFIRMADO
+        por market_price → ERROR_DE_PRECIO (distinto de un CHOLLO de 70-85%)."""
+        # original 2000, current 200 → 90% desc; market 1200 confirma el valor alto
+        deals = [_make_deal(title="Apple iPhone 15 128GB Azul Libre",
+                            current_price=200, original_price=2000, market_price=1200)]
+        cfg = {
+            "enabled": True,
+            "products": [{"name": "iPhone 15", "max_price": 600}],
+        }
+        result = check_watchlist(deals, cfg, min_discount=45.0)
+        assert len(result) == 1
+        assert result[0].alert_tier == "ERROR_DE_PRECIO"
+
+    def test_error_requires_external_confirmation(self):
+        """En el rango 85-90% (no llega a la excepción del 90%), sin confirmación
+        externa NO se envía (PVP inventado)."""
+        # current 200 / original 1428 → 86% (>= 85 dispara el gate, < 90 sin excepción)
+        deals = [_make_deal(title="Apple iPhone 15 128GB Azul Libre",
+                            current_price=200, original_price=1428)]  # 86%, sin market
+        cfg = {
+            "enabled": True,
+            "products": [{"name": "iPhone 15", "max_price": 600}],
+        }
+        result = check_watchlist(deals, cfg, min_discount=45.0)
+        assert result == []
 
     def test_below_min_discount_excluded(self):
         """Descuento < 45% vs max_price no matchea."""
@@ -368,8 +615,9 @@ class TestCheckWatchlist:
         assert result == []
 
     def test_error_de_precio_tier(self):
-        """Si el precio es < 25% del max_price, se marca como ERROR_DE_PRECIO."""
-        deals = [_make_deal(title="AirPods Pro", current_price=40)]
+        """Precio < 25% del max_price → ERROR_DE_PRECIO (confirmado por market)."""
+        # market_price 250 confirma el valor alto (AirPods Pro reales ~250€)
+        deals = [_make_deal(title="AirPods Pro", current_price=40, market_price=250)]
         cfg = {
             "enabled": True,
             "products": [{"name": "AirPods Pro", "max_price": 180}],
@@ -382,9 +630,9 @@ class TestCheckWatchlist:
         """El mismo URL no se matchea dos veces."""
         deals = [
             _make_deal(title="iPhone 15 Pro", url="https://x.com/p1",
-                       current_price=200, original_price=600),
+                       current_price=150, original_price=600),  # 75%
             _make_deal(title="iPhone 15 Pro", url="https://x.com/p1",
-                       current_price=200, original_price=600),
+                       current_price=150, original_price=600),
         ]
         cfg = {
             "enabled": True,
@@ -424,7 +672,7 @@ class TestCheckWatchlist:
     def test_primary_product_matched(self):
         """'PS5' al inicio del título sí matchea (producto principal)."""
         deals = [_make_deal(title="PS5 Slim 1TB Digital Edition",
-                            current_price=150, original_price=400)]
+                            current_price=150, original_price=600)]  # 75%
         cfg = {
             "enabled": True,
             "products": [{"name": "PS5", "max_price": 350}],
@@ -754,6 +1002,71 @@ class TestCrossStoreDeals:
 
         pairs = tmp_db.find_cross_store_deals(hours=1, min_discount_pct=30.0)
         assert len(pairs) == 0
+
+    def test_product_id_exact_match(self, tmp_db):
+        """Mismo product_id en dos tiendas empareja aunque los títulos difieran."""
+        tmp_db.upsert_deal(_make_deal(
+            title="Sony WH-1000XM5 Auriculares", url="https://a.com/1",
+            store="amazon", current_price=500, product_id="ean:111"))
+        tmp_db.upsert_deal(_make_deal(
+            title="Auriculares Sony XM5 Bluetooth Negro", url="https://c.com/1",
+            store="coolmod", current_price=200, product_id="ean:111"))
+        pairs = tmp_db.find_cross_store_deals(hours=1, min_discount_pct=45.0)
+        assert len(pairs) == 1
+        cheap, expensive = pairs[0]
+        assert cheap.store == "coolmod" and expensive.store == "amazon"
+
+    def test_different_product_id_not_matched(self, tmp_db):
+        """Mismo título pero product_id distinto NO empareja (productos distintos)."""
+        tmp_db.upsert_deal(_make_deal(
+            title="Sony WH-1000XM5 Auriculares", url="https://a.com/1",
+            store="amazon", current_price=500, product_id="ean:111"))
+        tmp_db.upsert_deal(_make_deal(
+            title="Sony WH-1000XM5 Auriculares", url="https://l.com/1",
+            store="ldlc", current_price=200, product_id="ean:222"))
+        pairs = tmp_db.find_cross_store_deals(hours=1, min_discount_pct=45.0)
+        assert len(pairs) == 0
+
+    def test_product_id_fallback_to_fuzzy_when_one_missing(self, tmp_db):
+        """Si a uno le falta product_id, se cae al fuzzy de título (degradación)."""
+        tmp_db.upsert_deal(_make_deal(
+            title="iPhone 15 Pro 256GB", url="https://a.com/1",
+            store="amazon", current_price=999, product_id="ean:111"))
+        tmp_db.upsert_deal(_make_deal(
+            title="iPhone 15 Pro 256GB", url="https://p.com/1",
+            store="pccomponentes", current_price=500))  # sin product_id
+        pairs = tmp_db.find_cross_store_deals(hours=1, min_discount_pct=45.0)
+        assert len(pairs) == 1
+
+
+class TestPriceStatsByProductId:
+    """Historial agrupado por product_id (anti-envenenamiento)."""
+
+    def test_aggregates_across_urls(self, tmp_db):
+        """El historial del mismo product_id se agrega a través de varias URLs."""
+        for _ in range(3):
+            tmp_db.upsert_deal(_make_deal(url="https://x.com/u1", store="x",
+                                          current_price=100, product_id="ean:999"))
+        for _ in range(2):
+            tmp_db.upsert_deal(_make_deal(url="https://y.com/u2", store="y",
+                                          current_price=100, product_id="ean:999"))
+        stats = tmp_db.get_price_stats_by_product_id("ean:999")
+        assert stats["observations"] == 5
+        assert stats["median"] == 100.0
+
+    def test_url_change_does_not_poison(self, tmp_db):
+        """Una URL que cambia de producto no contamina el historial por product_id."""
+        # Misma URL: primero producto ean:999 @100, luego ean:888 @50
+        for _ in range(3):
+            tmp_db.upsert_deal(_make_deal(url="https://shared/slot", store="x",
+                                          current_price=100, product_id="ean:999"))
+        for _ in range(2):
+            tmp_db.upsert_deal(_make_deal(url="https://shared/slot", store="x",
+                                          current_price=50, product_id="ean:888"))
+        s999 = tmp_db.get_price_stats_by_product_id("ean:999")
+        s888 = tmp_db.get_price_stats_by_product_id("ean:888")
+        assert s999["observations"] == 3 and s999["median"] == 100.0
+        assert s888["observations"] == 2 and s888["median"] == 50.0
 
 
 # ===========================================================================
@@ -1270,9 +1583,10 @@ class TestVerifyRealDeals:
         assert len(verified) == 0
 
     def test_real_discount_passes(self, tmp_db):
-        """Producto con historial y bajada real (>50%, >50€ ahorro) pasa la verificación."""
-        # Registrar historial de precios altos (mediana ~500€)
-        d_initial = _make_deal(url="https://x.com/p1", current_price=500)
+        """Producto (liquidez alta) con historial y bajada real pasa la verificación."""
+        # Marca de alta liquidez (umbral 60%) e historial alto (mediana ~500€)
+        title = "Apple iPhone 15 Pro 256GB"
+        d_initial = _make_deal(title=title, url="https://x.com/p1", current_price=500)
         tmp_db.upsert_deal(d_initial)
         deal_id = tmp_db.conn.execute("SELECT id FROM deals WHERE url=?", (d_initial.url,)).fetchone()["id"]
         for price in [500, 490, 510]:
@@ -1282,13 +1596,12 @@ class TestVerifyRealDeals:
             )
         tmp_db.conn.commit()
 
-        # Ahora el precio baja a 200 (~60% descuento, 300€ ahorro)
-        d_cheap = _make_deal(url="https://x.com/p1", current_price=200)
+        # Ahora el precio baja a 150 (~70% descuento, 350€ ahorro)
+        d_cheap = _make_deal(title=title, url="https://x.com/p1", current_price=150)
         tmp_db.upsert_deal(d_cheap)
 
-        d_check = _make_deal(url="https://x.com/p1", current_price=200, discount_pct=20)
-        verified = verify_real_deals([d_check], db=tmp_db, min_observations=2,
-                                      real_discount_min=50.0)
+        d_check = _make_deal(title=title, url="https://x.com/p1", current_price=150, discount_pct=20)
+        verified = verify_real_deals([d_check], db=tmp_db, min_observations=2)
         assert len(verified) == 1
         assert verified[0].alert_tier in ("CHOLLO", "ERROR_DE_PRECIO")
 
@@ -1309,17 +1622,68 @@ class TestVerifyRealDeals:
         assert len(verified) == 0
 
     def test_price_error_bypass(self, tmp_db):
-        """Posible error de precio (>50% descuento) bypasses historial check."""
+        """Error de precio en producto nuevo: requiere market_price que confirme."""
         d = _make_deal(
+            title="Apple iPhone 15 128GB",  # liquidez alta (umbral 60%)
             url="https://x.com/bypass",
             current_price=100,
             original_price=300,
             discount_pct=0.0,
             store="pccomponentes",
+            market_price=300,  # fuente externa: descuento real 66% >= umbral 60
         )
         # No insertar en DB para que sea "nuevo"
         verified = verify_real_deals(
             [d], db=tmp_db, min_observations=2, price_error_threshold=50.0,
+        )
+        assert len(verified) == 1
+        assert verified[0].alert_tier == "ERROR_DE_PRECIO"
+
+    def test_price_error_bypass_requires_market_price(self, tmp_db):
+        """Producto nuevo sin market_price NO se envía aunque la tienda reporte
+        un descuento enorme — market_price es obligatorio para el bypass."""
+        d = _make_deal(
+            url="https://x.com/nobypass",
+            current_price=100,
+            original_price=300,  # tienda dice 66% descuento
+            discount_pct=0.0,
+            store="pccomponentes",
+            # market_price=None (sin verificación externa)
+        )
+        verified = verify_real_deals(
+            [d], db=tmp_db, min_observations=2, price_error_threshold=50.0,
+        )
+        assert len(verified) == 0
+
+    def test_price_error_bypass_market_contradicts(self, tmp_db):
+        """Si market_price NO confirma el descuento (market_discount < umbral),
+        no se envía aunque la tienda reporte un descuentazo."""
+        d = _make_deal(
+            url="https://x.com/contradict",
+            current_price=100,
+            original_price=300,        # tienda dice 66%
+            discount_pct=0.0,
+            store="pccomponentes",
+            market_price=120,          # market real: solo 17% < umbral 50
+        )
+        verified = verify_real_deals(
+            [d], db=tmp_db, min_observations=2, price_error_threshold=50.0,
+        )
+        assert len(verified) == 0
+
+    def test_bypass_confirmed_by_product_id_other_store(self, tmp_db):
+        """Producto nuevo SIN market_price pero con el mismo product_id visto en
+        OTRA tienda a precio alto → confirmación externa (fuente 3) → se envía."""
+        # Otra tienda tiene el mismo EAN a 571€ (valor alto confirmado)
+        tmp_db.upsert_deal(_make_deal(
+            title="Roborock S8", url="https://a.com/1", store="amazon",
+            current_price=571, product_id="ean:111"))
+        # Deal nuevo en otra tienda a 57€, sin market_price, mismo EAN
+        d = _make_deal(
+            title="Roborock S8 Pro Ultra", url="https://c.com/1", store="coolmod",
+            current_price=57, original_price=599, product_id="ean:111")
+        verified = verify_real_deals(
+            [d], db=tmp_db, min_observations=5, price_error_threshold=75.0, min_savings=80,
         )
         assert len(verified) == 1
         assert verified[0].alert_tier == "ERROR_DE_PRECIO"
@@ -1587,13 +1951,13 @@ class TestPipelineIntegration:
                                store="amazon", category="phones")
                 tmp_db.upsert_deal(d)
 
-        # Simular bajada de precio real en product0
+        # Simular bajada de precio real en product0 (≥70% para reventa)
         d_cheap = _make_deal(
             title="Samsung Galaxy S24 128GB",
             url="https://x.com/product0",
-            current_price=50.0,  # Era ~100, ahora 50
+            current_price=15.0,  # Era ~100, ahora 15 (85% bajada, ahorro 85€)
             original_price=100.0,
-            discount_pct=50.0,
+            discount_pct=85.0,
             store="amazon",
             category="phones",
         )
@@ -1612,7 +1976,7 @@ class TestPipelineIntegration:
     def test_watchlist_plus_filters(self, tmp_db):
         """Watchlist se procesa antes de apply_filters."""
         deals = [
-            _make_deal(title="Apple iPhone 15 Pro 256GB", current_price=250,
+            _make_deal(title="Apple iPhone 15 Pro 256GB", current_price=150,
                        original_price=600, url="https://x.com/iphone15pro"),
             _make_deal(title="Random Product", current_price=50, discount_pct=5,
                        url="https://x.com/random"),
@@ -1623,7 +1987,7 @@ class TestPipelineIntegration:
             "products": [{"name": "iPhone 15", "max_price": 600}],
         }
 
-        # Watchlist capta el iPhone (store_disc=58%, >= min_discount 45%)
+        # Watchlist capta el iPhone (store_disc=75%, >= effective_threshold 70%)
         wl = check_watchlist(deals, watchlist_cfg, min_discount=45.0)
         assert len(wl) == 1
         assert "iPhone" in wl[0].title
@@ -2405,8 +2769,8 @@ class TestWatchlistMerge:
     def test_merge_db_items(self, tmp_db):
         tmp_db.add_watchlist_item("RTX 5070", 500)
         deals = [
-            _make_deal(title="RTX 5070 Gaming GPU", current_price=200,
-                       original_price=500, url="https://x.com/rtx5070"),
+            _make_deal(title="RTX 5070 Gaming GPU", current_price=150,
+                       original_price=500, url="https://x.com/rtx5070"),  # 70% = CHOLLO
         ]
         watchlist_cfg = {"enabled": True, "products": []}
         matched = check_watchlist(deals, watchlist_cfg, min_discount=30.0, db=tmp_db)
@@ -2416,8 +2780,8 @@ class TestWatchlistMerge:
         """Si el mismo producto está en YAML y DB, no duplicar."""
         tmp_db.add_watchlist_item("RTX 5070", 500)
         deals = [
-            _make_deal(title="RTX 5070 Gaming GPU", current_price=200,
-                       original_price=500, url="https://x.com/rtx5070"),
+            _make_deal(title="RTX 5070 Gaming GPU", current_price=150,
+                       original_price=500, url="https://x.com/rtx5070"),  # 70% = CHOLLO
         ]
         watchlist_cfg = {
             "enabled": True,

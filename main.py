@@ -9,7 +9,10 @@ Uso:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
+import os
+import signal
 import sys
 import time
 
@@ -34,6 +37,35 @@ from deals_scraper.stores import STORE_REGISTRY, DEFAULT_STORE_CLASS
 from deals_scraper.telegram_bot import TelegramBot
 
 logger = logging.getLogger("deals_scraper")
+
+# PID del proceso principal — para matar Chrome hijos al salir
+_MY_PID = os.getpid()
+
+
+def _cleanup_chrome_processes() -> None:
+    """Mata procesos Chrome/Chromium que sean hijos de este proceso."""
+    import subprocess
+    try:
+        # Buscar procesos Chrome cuyo parent sea nuestro PID o hayan quedado huérfanos
+        result = subprocess.run(
+            ["pgrep", "-f", "chrome.*--headless|chrome-headless|chromium"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip():
+            pids = result.stdout.strip().split("\n")
+            for pid_str in pids:
+                try:
+                    pid = int(pid_str)
+                    if pid != _MY_PID:
+                        os.kill(pid, signal.SIGTERM)
+                except (ValueError, ProcessLookupError):
+                    pass
+            logger.info("Limpieza: %d procesos Chrome terminados", len(pids))
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_chrome_processes)
 
 
 def _setup_logging(verbose: bool = False) -> None:
@@ -65,10 +97,13 @@ async def run_cycle(
     store_configs = get_store_configs(cfg)
     filters_cfg = get_filters(cfg)
     speed_cfg = cfg.get("speed", {})
+    speed_mode = speed_cfg.get("mode", "stealth") == "fast"
+    anti_ban = get_anti_ban(cfg)
     max_per_cycle = cfg.get("telegram", {}).get("max_offers_per_cycle", 20)
     real_discount_min = filters_cfg.get("real_discount_min", 10.0)
     min_observations = filters_cfg.get("min_observations", 2)
     price_error_threshold = speed_cfg.get("price_error_threshold", 50.0)
+    min_savings = filters_cfg.get("min_savings", 80.0)
     max_concurrent_stores = speed_cfg.get("max_concurrent_stores", 4)
     max_concurrent_urls = speed_cfg.get("max_concurrent_urls_per_store", 3)
 
@@ -87,11 +122,25 @@ async def run_cycle(
     async def _scrape_store(sc):
         nonlocal stores_failed
         async with store_semaphore:
+            # Use system Chrome for stores that need it (e.g. Akamai TLS fingerprinting)
+            effective_browser = browser_client
+            own_browser = None
+            if sc.use_system_chrome:
+                own_browser = BrowserClient(
+                    delay_min=anti_ban["delay_min"],
+                    delay_max=anti_ban["delay_max"],
+                    max_requests_per_minute=anti_ban["max_requests_per_minute"],
+                    proxy_url=sc.proxy_url or anti_ban["proxy_url"],
+                    speed_mode=speed_mode,
+                    channel="chrome",
+                )
+                effective_browser = own_browser
+
             store_cls = STORE_REGISTRY.get(sc.name, DEFAULT_STORE_CLASS)
             store = store_cls(
                 config=sc,
                 http_client=http_client,
-                browser_client=browser_client,
+                browser_client=effective_browser,
                 max_concurrent_urls=max_concurrent_urls,
             )
             logger.info("=== Scrapeando %s ===", sc.name)
@@ -105,6 +154,9 @@ async def run_cycle(
                 logger.exception("Error scrapeando %s", sc.name)
                 stores_failed += 1
                 return []
+            finally:
+                if own_browser:
+                    await own_browser.close()
 
     results = await asyncio.gather(*[_scrape_store(sc) for sc in store_configs])
 
@@ -147,7 +199,10 @@ async def run_cycle(
     watchlist_deals: list = []
     if watchlist_cfg.get("enabled", False):
         min_discount = filters_cfg.get("min_discount", 45.0)
-        watchlist_deals = check_watchlist(all_raw_deals, watchlist_cfg, min_discount=min_discount, db=db)
+        watchlist_deals = check_watchlist(
+            all_raw_deals, watchlist_cfg, min_discount=min_discount, db=db,
+            min_observations=min_observations, price_error_threshold=price_error_threshold,
+        )
         for deal in watchlist_deals:
             if deals_sent >= max_per_cycle:
                 logger.info("Límite de alertas alcanzado (%d), parando envíos", max_per_cycle)
@@ -213,11 +268,13 @@ async def run_cycle(
         min_observations=min_observations,
         real_discount_min=real_discount_min,
         price_error_threshold=price_error_threshold,
+        min_savings=min_savings,
     )
 
-    # --- Alertas inmediatas para errores de precio ---
-    price_errors = [d for d in verified if d.alert_tier == "ERROR_DE_PRECIO"]
-    normal_deals = [d for d in verified if d.alert_tier != "ERROR_DE_PRECIO"]
+    # --- Alertas inmediatas para errores de precio (confirmados y sin confirmar) ---
+    _error_tiers = ("ERROR_DE_PRECIO", "ERROR_NO_CONFIRMADO")
+    price_errors = [d for d in verified if d.alert_tier in _error_tiers]
+    normal_deals = [d for d in verified if d.alert_tier not in _error_tiers]
 
     for deal in price_errors:
         if deals_sent >= max_per_cycle:
@@ -313,10 +370,13 @@ def main(once: bool, daemon: bool, config_path: str | None, verbose: bool,
         proxy_url=anti_ban["proxy_url"],
         speed_mode=speed_mode,
     )
+    _tg = cfg["telegram"]
     telegram_bot = TelegramBot(
-        bot_token=cfg["telegram"]["bot_token"],
-        chat_id=str(cfg["telegram"]["chat_id"]),
+        bot_token=_tg["bot_token"],
+        chat_id=str(_tg["chat_id"]),
         db=db,
+        chat_id_errores=str(_tg["chat_id_errores"]) if _tg.get("chat_id_errores") else None,
+        chat_id_chollos=str(_tg["chat_id_chollos"]) if _tg.get("chat_id_chollos") else None,
     )
 
     if dashboard:
@@ -383,15 +443,43 @@ async def _run_daemon(cfg, db, http_client, browser_client, telegram_bot) -> Non
     await run_cycle(cfg, db, http_client, browser_client, telegram_bot)
 
     # Mantener vivo con scheduler
+    # Signal handler para shutdown limpio
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda: asyncio.ensure_future(_shutdown(
+            scheduler, app, http_client, browser_client, db,
+        )))
+
     try:
         await scheduler.run_forever()
     finally:
+        await _shutdown(scheduler, app, http_client, browser_client, db)
+
+
+async def _shutdown(scheduler, app, http_client, browser_client, db) -> None:
+    """Shutdown limpio: cierra todos los recursos y mata procesos Chrome."""
+    logger.info("Shutdown iniciado — cerrando recursos...")
+    try:
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+    except Exception:
+        pass
+    try:
         await http_client.close()
+    except Exception:
+        pass
+    try:
         await browser_client.close()
+    except Exception:
+        pass
+    try:
         db.close()
+    except Exception:
+        pass
+    _cleanup_chrome_processes()
+    logger.info("Shutdown completo")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,15 @@
+[Unit]
+Description=Deals Scraper Bot
+After=network.target
+
+[Service]
+Type=simple
+User=scraper
+WorkingDirectory=/home/scraper/deals-scraper
+ExecStart=/home/scraper/deals-scraper/venv/bin/python3 main.py --daemon
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -25,6 +25,15 @@ _MOUNT_WIDGET_START_RE = re.compile(
 
 _PRICE_RE = re.compile(r"([\d.,]+)\s*€")
 
+# ASIN en la URL del producto: /dp/B0XXXXXXXX, /gp/product/B0XXXXXXXX, /gp/aw/d/...
+_ASIN_RE = re.compile(r"/(?:dp|gp/product|gp/aw/d)/([A-Z0-9]{10})(?:[/?]|$)")
+
+
+def _extract_asin(url: str) -> str | None:
+    """Extrae el ASIN (10 chars) de una URL de producto de Amazon, o None."""
+    m = _ASIN_RE.search(url or "")
+    return m.group(1) if m else None
+
 
 def _extract_json_object(text: str, start: int) -> dict | None:
     """Extrae un objeto JSON balanceado desde la posición start en text."""
@@ -181,6 +190,7 @@ class AmazonStore(BaseStore):
             if current_price is None:
                 return None
 
+            asin = _extract_asin(product_url)
             return Deal(
                 title=title,
                 url=product_url,
@@ -189,6 +199,7 @@ class AmazonStore(BaseStore):
                 original_price=original_price,
                 discount_pct=discount_pct,
                 image_url=image_url,
+                product_id=f"asin:{asin}" if asin else None,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -248,6 +259,7 @@ class AmazonStore(BaseStore):
             img = item.select_one("img.s-image")
             image_url = img.get("src", "") if img else ""
 
+            # asin viene de data-asin y es justo el de la URL /dp/{asin}
             return Deal(
                 title=title,
                 url=product_url,
@@ -255,6 +267,7 @@ class AmazonStore(BaseStore):
                 current_price=current_price,
                 original_price=original_price,
                 image_url=image_url,
+                product_id=f"asin:{asin}" if asin else None,
             )
         except (KeyError, TypeError, ValueError):
             return None

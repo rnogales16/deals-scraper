@@ -16,20 +16,32 @@ if TYPE_CHECKING:
     from .base import BaseStore
 
 from .amazon import AmazonStore
+from .cecotec import CecotecStore
 from .cex import CeXStore
+from .conforama import ConforamaStore
 from .decathlon import DecathlonStore
+from .elcorteingles import ElCorteInglesStore
 from .generic import GenericStore
+from .lidl import LidlStore
 from .mediamarkt import MediaMarktStore
 from .pccomponentes import PcComponentesStore
+from .thomann import ThomannStore
+from .vsgamers import VSGamersStore
 from .woocommerce import WooCommerceStore
 
 # Tiendas con scraper específico
 STORE_REGISTRY: dict[str, type[BaseStore]] = {
     "amazon": AmazonStore,
+    "cecotec": CecotecStore,
     "cex": CeXStore,
+    "conforama": ConforamaStore,
     "decathlon": DecathlonStore,
+    "elcorteingles": ElCorteInglesStore,
+    "lidl": LidlStore,
     "mediamarkt": MediaMarktStore,
     "pccomponentes": PcComponentesStore,
+    "thomann": ThomannStore,
+    "vsgamers": VSGamersStore,
     "lifeinformatica": WooCommerceStore,
 }
 

@@ -19,6 +19,9 @@ class Deal:
     category: str = ""
     currency: str = "EUR"
     image_url: str = ""
+    # Identificador único de producto con prefijo de tipo: "ean:8412345678901",
+    # "gtin:...", "asin:B0XXXX". Opcional; eje futuro del matching anti-fake.
+    product_id: str | None = None
     detected_at: datetime = field(default_factory=datetime.utcnow)
     sent_to_telegram: bool = False
     id: int | None = None
@@ -44,6 +47,8 @@ class StoreConfig:
     client_type: str  # "http" o "browser"
     force_stealth: bool = False  # Forzar modo stealth aunque speed_mode=fast
     proxy_url: str | None = None  # Proxy override per-store
+    wait_for_selector: str | None = None  # CSS selector to wait for before capturing HTML
+    use_system_chrome: bool = False  # Use system Chrome (channel='chrome') to bypass TLS fingerprinting
 
     @classmethod
     def from_dict(cls, data: dict) -> StoreConfig:
@@ -55,4 +60,6 @@ class StoreConfig:
             client_type=data.get("client_type", "http"),
             force_stealth=data.get("force_stealth", False),
             proxy_url=data.get("proxy_url"),
+            wait_for_selector=data.get("wait_for_selector"),
+            use_system_chrome=data.get("use_system_chrome", False),
         )

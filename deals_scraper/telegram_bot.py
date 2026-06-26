@@ -28,12 +28,28 @@ _ALERT_COOLDOWN_SECS = 6 * 3600
 class TelegramBot:
     """Gestiona el envío de ofertas y comandos del bot de Telegram."""
 
-    def __init__(self, bot_token: str, chat_id: str, db: Database) -> None:
+    # Descuento a partir del cual una alerta va al canal ERRORES (vs CHOLLOS).
+    _ERRORES_DISCOUNT = 85.0
+
+    def __init__(
+        self, bot_token: str, chat_id: str, db: Database,
+        chat_id_errores: str | None = None, chat_id_chollos: str | None = None,
+    ) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
+        # Dos canales; si no se configuran, fallback al chat_id principal.
+        self.chat_id_errores = chat_id_errores or chat_id
+        self.chat_id_chollos = chat_id_chollos or chat_id
         self.db = db
         self._bot = Bot(token=bot_token)
         self._sent_urls: dict[str, float] = {}  # url → timestamp
+
+    def _chat_id_for(self, deal: Deal) -> str:
+        """Canal según el tier de la alerta: ERRORES para descuentos >= 85%
+        (confirmados, llegan aquí ya verificados), CHOLLOS para el resto (60-85%)."""
+        if getattr(deal, "discount_pct", 0.0) >= self._ERRORES_DISCOUNT:
+            return self.chat_id_errores
+        return self.chat_id_chollos
 
     async def validate(self) -> None:
         """Valida token y chat_id al arrancar. Falla rápido si son inválidos."""
@@ -86,13 +102,14 @@ class TelegramBot:
             logger.exception("Error enviando alerta inmediata: %s", deal.title)
 
     async def _send_deal(self, deal: Deal) -> None:
-        """Envía una oferta individual con formato HTML."""
+        """Envía una oferta individual con formato HTML al canal correspondiente."""
         text = self._format_deal(deal)
+        chat_id = self._chat_id_for(deal)
 
         if deal.image_url:
             try:
                 await self._bot.send_photo(
-                    chat_id=self.chat_id,
+                    chat_id=chat_id,
                     photo=deal.image_url,
                     caption=text,
                     parse_mode=ParseMode.HTML,
@@ -103,7 +120,7 @@ class TelegramBot:
                 logger.debug("No se pudo enviar imagen, enviando solo texto")
 
         await self._bot.send_message(
-            chat_id=self.chat_id,
+            chat_id=chat_id,
             text=text,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=False,
@@ -125,11 +142,21 @@ class TelegramBot:
 
         if tier == "ERROR_DE_PRECIO":
             return TelegramBot._format_price_error(deal)
+        if tier == "ERROR_NO_CONFIRMADO":
+            return TelegramBot._format_price_error_unconfirmed(deal)
         if tier == "CHOLLO":
             return TelegramBot._format_chollo(deal)
         if tier == "BAJADA_PRECIO":
             return TelegramBot._format_price_drop(deal)
         return TelegramBot._format_normal(deal)
+
+    @staticmethod
+    def _format_price_error_unconfirmed(deal: Deal) -> str:
+        """Error de precio SIN confirmación externa (excepción >=90%). Se marca de
+        forma visible para vigilar su tasa de acierto."""
+        base = TelegramBot._format_price_error(deal)
+        header = "⚠️ <b>SIN CONFIRMAR</b> (descuento extremo, sin verificar vs Idealo/cross-store)"
+        return f"{header}\n{base}"
 
     @staticmethod
     def _format_price_drop(deal: Deal) -> str:
@@ -256,7 +283,7 @@ class TelegramBot:
             diff_pct = round((1 - cheap.current_price / expensive.current_price) * 100)
             text = self._format_cross_store(cheap, expensive, diff_pct)
             await self._bot.send_message(
-                chat_id=self.chat_id,
+                chat_id=self._chat_id_for(cheap),
                 text=text,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
