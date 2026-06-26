@@ -487,6 +487,10 @@ class BrowserClient:
 
         self._playwright = None
         self._browser = None
+        self._browser_pid: int | None = None
+        # Epoch: incrementa en cada lanzamiento. Permite deduplicar
+        # relanzamientos concurrentes cuando N tiendas fallan a la vez.
+        self._epoch = 0
         self._start_lock: asyncio.Lock | None = None
         self._request_log: dict[str, list[float]] = defaultdict(list)
         # Cookie persistence: domain -> list[cookie dicts]
@@ -557,6 +561,7 @@ class BrowserClient:
             self._browser_pid = self._browser.process.pid
         except Exception:
             self._browser_pid = None
+        self._epoch += 1
         logger.info("Navegador Chromium iniciado (headless=%s, channel=%s, pid=%s)", self.headless, self.channel or "default", self._browser_pid)
 
     async def _teardown_locked(self) -> None:
@@ -571,16 +576,18 @@ class BrowserClient:
             except Exception:
                 pass
         self._contexts.clear()
+        # Timeouts: si el driver está colgado, close()/stop() pueden bloquearse
+        # para siempre y dejar la recuperación atascada. Matamos el proceso igual.
         try:
             if self._browser is not None:
-                await self._browser.close()
+                await asyncio.wait_for(self._browser.close(), timeout=10)
         except Exception:
             pass
         self._kill_browser_process()
         self._browser_pid = None
         try:
             if self._playwright is not None:
-                await self._playwright.stop()
+                await asyncio.wait_for(self._playwright.stop(), timeout=10)
         except Exception:
             pass
         self._browser = None
@@ -590,20 +597,39 @@ class BrowserClient:
         """Ejecuta una operación de fetch con auto-recuperación del navegador.
 
         Garantiza el navegador vivo antes de empezar y, si el driver muere a
-        mitad de la operación, lo relanza y reintenta UNA vez. Si vuelve a
-        fallar, propaga (la tienda registra el error y sigue, sin bucle infinito).
+        mitad de la operación, FUERZA un relanzamiento y reintenta UNA vez. Si
+        vuelve a fallar, propaga (la tienda registra el error y sigue, sin bucle
+        infinito).
         """
         await self._ensure_started()
+        epoch = self._epoch
         try:
             return await op()
         except Exception as exc:
             if not _is_browser_dead_error(exc):
                 raise
             logger.warning(
-                "Driver del navegador caído durante %s — relanzando y reintentando", url
+                "Driver del navegador caído durante %s — forzando relanzamiento y reintentando", url
             )
-            await self._ensure_started()
+            await self._force_restart(epoch)
             return await op()
+
+    async def _force_restart(self, seen_epoch: int) -> None:
+        """Fuerza teardown + relanzamiento ante un error de 'driver muerto'.
+
+        NO se fía de ``is_connected()`` (que puede devolver True aunque el driver
+        esté roto — esa era la causa de que la auto-recuperación no se disparara
+        y se acumularan decenas de miles de 'Connection closed'). El ``epoch``
+        deduplica: si otra corrutina ya relanzó, esta sale sin hacer nada.
+        """
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            if self._epoch != seen_epoch:
+                return  # otra corrutina ya relanzó el navegador
+            logger.warning("Forzando reinicio del navegador (epoch %d)...", seen_epoch)
+            await self._teardown_locked()
+            await self._launch_locked()
 
     async def cleanup_contexts(self) -> None:
         """Cierra todos los contextos persistentes para liberar memoria.
