@@ -49,6 +49,7 @@ class StoreConfig:
     proxy_url: str | None = None  # Proxy override per-store
     wait_for_selector: str | None = None  # CSS selector to wait for before capturing HTML
     use_system_chrome: bool = False  # Use system Chrome (channel='chrome') to bypass TLS fingerprinting
+    headful: bool = False  # Run a real (non-headless) browser, off-screen — needed for Akamai (e.g. El Corte Inglés)
 
     @classmethod
     def from_dict(cls, data: dict) -> StoreConfig:
@@ -62,4 +63,5 @@ class StoreConfig:
             proxy_url=data.get("proxy_url"),
             wait_for_selector=data.get("wait_for_selector"),
             use_system_chrome=data.get("use_system_chrome", False),
+            headful=data.get("headful", False),
         )

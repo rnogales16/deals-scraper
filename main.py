@@ -77,6 +77,25 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
+# Semáforo GLOBAL de tiendas, compartido entre todos los jobs del scheduler.
+# En modo daemon cada tienda tiene su propio job; sin esto, intervalos que
+# coinciden lanzan N run_cycle simultáneos cada uno con su semáforo local,
+# así que max_concurrent_stores no limitaba nada entre jobs → picos de carga.
+_global_store_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_store_semaphore(max_concurrent_stores: int) -> asyncio.Semaphore:
+    """Devuelve el semáforo global de tiendas, creándolo de forma perezosa.
+
+    Se crea dentro del event loop en ejecución (primer run_cycle), por lo que
+    queda ligado al loop correcto tanto en --once como en --daemon.
+    """
+    global _global_store_semaphore
+    if _global_store_semaphore is None:
+        _global_store_semaphore = asyncio.Semaphore(max_concurrent_stores)
+    return _global_store_semaphore
+
+
 async def run_cycle(
     cfg: dict,
     db: Database,
@@ -116,7 +135,9 @@ async def run_cycle(
 
     # --- Scraping paralelo de tiendas ---
     cycle_start = time.monotonic()
-    store_semaphore = asyncio.Semaphore(max_concurrent_stores)
+    # Semáforo GLOBAL (no local): limita tiendas concurrentes a través de TODOS
+    # los jobs del scheduler, no solo dentro de un único run_cycle.
+    store_semaphore = _get_store_semaphore(max_concurrent_stores)
     stores_failed = 0
 
     async def _scrape_store(sc):
@@ -126,6 +147,7 @@ async def run_cycle(
             effective_browser = browser_client
             own_browser = None
             if sc.use_system_chrome:
+                _headful = getattr(sc, "headful", False)
                 own_browser = BrowserClient(
                     delay_min=anti_ban["delay_min"],
                     delay_max=anti_ban["delay_max"],
@@ -133,6 +155,12 @@ async def run_cycle(
                     proxy_url=sc.proxy_url or anti_ban["proxy_url"],
                     speed_mode=speed_mode,
                     channel="chrome",
+                    headless=not _headful,
+                    native=_headful,
+                    extra_args=(
+                        ["--window-position=-3000,-3000", "--window-size=1280,900"]
+                        if _headful else None
+                    ),
                 )
                 effective_browser = own_browser
 
@@ -419,8 +447,11 @@ async def _run_daemon(cfg, db, http_client, browser_client, telegram_bot) -> Non
     app = telegram_bot.build_application()
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
-    logger.info("Telegram polling iniciado — comandos activos")
+    if os.environ.get("TELEGRAM_POLLING", "1") == "0":
+        logger.info("Telegram polling DESACTIVADO (TELEGRAM_POLLING=0) — modo híbrido secundario")
+    else:
+        await app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Telegram polling iniciado — comandos activos")
 
     scheduler = Scheduler()
     store_configs = get_store_configs(cfg)

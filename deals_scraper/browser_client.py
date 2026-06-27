@@ -476,6 +476,8 @@ class BrowserClient:
         headless: bool = True,
         speed_mode: bool = False,
         channel: str | None = None,
+        extra_args: list[str] | None = None,
+        native: bool = False,
     ) -> None:
         self.delay_min = delay_min
         self.delay_max = delay_max
@@ -484,6 +486,11 @@ class BrowserClient:
         self.headless = headless
         self.speed_mode = speed_mode
         self.channel = channel
+        self.extra_args = extra_args or []
+        # native=True: usa el fingerprint nativo del navegador (sin UA falso ni
+        # stealth). Necesario contra Akamai (El Corte Inglés), que detecta el
+        # fingerprint manipulado de un Chrome headful como bot.
+        self.native = native
 
         self._playwright = None
         self._browser = None
@@ -550,6 +557,8 @@ class BrowserClient:
                 "--disable-features=IsolateOrigins,site-per-process",
             ],
         }
+        if self.extra_args:
+            launch_opts["args"].extend(self.extra_args)
         if self.proxy_url:
             launch_opts["proxy"] = {"server": self.proxy_url}
         if self.channel:
@@ -911,6 +920,20 @@ class BrowserClient:
         """Return a persistent BrowserContext for the domain, creating if needed."""
         if domain in self._contexts:
             return self._contexts[domain]
+
+        if self.native:
+            # Fingerprint nativo del navegador real (Chrome del sistema): sin UA
+            # falso ni stealth — coherente, lo que necesita Akamai (El Corte Inglés).
+            context = await self._browser.new_context(
+                locale="es-ES",
+                extra_http_headers={
+                    "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+                },
+            )
+            await self._restore_cookies(context, domain)
+            self._contexts[domain] = context
+            logger.debug("Contexto NATIVO creado para %s", domain)
+            return context
 
         ua = random.choice(_USER_AGENTS)
         viewport = random.choice(_VIEWPORTS)
