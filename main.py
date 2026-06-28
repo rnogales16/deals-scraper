@@ -125,6 +125,10 @@ async def run_cycle(
     min_savings = filters_cfg.get("min_savings", 80.0)
     max_concurrent_stores = speed_cfg.get("max_concurrent_stores", 4)
     max_concurrent_urls = speed_cfg.get("max_concurrent_urls_per_store", 3)
+    # Timeout duro por tienda: un solo fetch colgado NO debe bloquear el gather
+    # (y por tanto el arranque del scheduler en el ciclo inicial). ECI headful
+    # con ~57 URLs tarda ~3-4 min, así que 8 min deja margen amplio.
+    store_timeout = speed_cfg.get("store_timeout_sec", 480)
 
     if store_name:
         store_configs = [s for s in store_configs if s.name == store_name]
@@ -173,18 +177,30 @@ async def run_cycle(
             )
             logger.info("=== Scrapeando %s ===", sc.name)
             try:
-                deals = await store.scrape()
+                deals = await asyncio.wait_for(store.scrape(), timeout=store_timeout)
                 logger.info("[%s] %d ofertas crudas encontradas", sc.name, len(deals))
                 if not deals:
                     stores_failed += 1
                 return deals
+            except asyncio.TimeoutError:
+                # Tienda colgada: la abortamos para no bloquear el ciclo entero.
+                logger.error(
+                    "[%s] TIMEOUT (%ds) — tienda abortada para no bloquear el ciclo",
+                    sc.name, store_timeout,
+                )
+                stores_failed += 1
+                return []
             except Exception:
                 logger.exception("Error scrapeando %s", sc.name)
                 stores_failed += 1
                 return []
             finally:
                 if own_browser:
-                    await own_browser.close()
+                    # Cierre acotado: close() de Chrome headful puede colgarse.
+                    try:
+                        await asyncio.wait_for(own_browser.close(), timeout=30)
+                    except Exception:
+                        logger.warning("[%s] timeout/err cerrando browser propio", sc.name)
 
     results = await asyncio.gather(*[_scrape_store(sc) for sc in store_configs])
 
