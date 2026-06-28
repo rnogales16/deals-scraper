@@ -80,11 +80,21 @@ class ElCorteInglesStore(BaseStore):
             return None
 
         # --- URL ---
-        link = card.select_one("a[href]")
+        # El enlace de producto es a.product_preview-title. NO usar el primer
+        # a[href] del card: suele ser el control del carrusel de imágenes
+        # (href="javascript:void(0)"), idéntico en todas las tarjetas, lo que
+        # colapsaba las 12 ofertas en 1 por el dedup de URL (páginas refurb).
+        link = card.select_one("a.product_preview-title[href]")
+        if not link:
+            for a in card.select("a[href]"):
+                h = a.get("href", "")
+                if h and not h.startswith(("javascript:", "#")):
+                    link = a
+                    break
         if not link:
             return None
         href = link.get("href", "")
-        if not href:
+        if not href or href.startswith(("javascript:", "#")):
             return None
         product_url = href if href.startswith("http") else f"https://www.elcorteingles.es{href}"
 
