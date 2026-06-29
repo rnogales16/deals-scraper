@@ -106,6 +106,10 @@ class TelegramBot:
         text = self._format_deal(deal)
         chat_id = self._chat_id_for(deal)
 
+        # Log estructurado de alerta (para conteo por fuente; grep "ALERTA tienda=")
+        _tier = "ERRORES" if (getattr(deal, "discount_pct", 0.0) or 0.0) >= self._ERRORES_DISCOUNT else "CHOLLOS"
+        logger.info("ALERTA tienda=%s tier=%s precio=%.2f", deal.store, _tier, deal.current_price)
+
         if deal.image_url:
             try:
                 await self._bot.send_photo(
@@ -289,6 +293,8 @@ class TelegramBot:
                 disable_web_page_preview=True,
             )
             self._sent_urls[cheap.url] = time.time()
+            _tier = "ERRORES" if (getattr(cheap, "discount_pct", 0.0) or 0.0) >= self._ERRORES_DISCOUNT else "CHOLLOS"
+            logger.info("ALERTA tienda=%s tier=%s precio=%.2f", cheap.store, _tier, cheap.current_price)
             logger.info(
                 "Cross-store enviado: %s — %s %.2f€ vs %s %.2f€ (-%d%%)",
                 cheap.title[:40], cheap.store, cheap.current_price,
