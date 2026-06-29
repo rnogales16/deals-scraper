@@ -39,6 +39,9 @@ STORE_REGISTRY: dict[str, type[BaseStore]] = {
     "elcorteingles": ElCorteInglesStore,
     "lidl": LidlStore,
     "mediamarkt": MediaMarktStore,
+    # Mismo parser que mediamarkt, store separado solo para darle a las URLs de
+    # reacondicionado un intervalo propio (más lento) sin tocar el general.
+    "mediamarkt_refurb": MediaMarktStore,
     "pccomponentes": PcComponentesStore,
     "thomann": ThomannStore,
     "vsgamers": VSGamersStore,
