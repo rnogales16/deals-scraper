@@ -28,6 +28,7 @@ from .pccomponentes import PcComponentesStore
 from .thomann import ThomannStore
 from .vsgamers import VSGamersStore
 from .woocommerce import WooCommerceStore
+from .worten import WortenStore
 
 # Tiendas con scraper específico
 STORE_REGISTRY: dict[str, type[BaseStore]] = {
@@ -43,6 +44,9 @@ STORE_REGISTRY: dict[str, type[BaseStore]] = {
     "thomann": ThomannStore,
     "vsgamers": VSGamersStore,
     "lifeinformatica": WooCommerceStore,
+    # Store dedicado al motor de reventa (Fase 1). El "worten" normal sigue en
+    # GenericStore para no romper sus alertas de descuento existentes.
+    "worten_flip": WortenStore,
 }
 
 # Scraper por defecto para tiendas sin implementación específica
